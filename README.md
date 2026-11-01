@@ -434,7 +434,7 @@ Every command accepts `--path <dir>` and `--exclude <glob>`. `nplusone` / `migra
 
 ### MCP server
 
-Register it once with your agent and it exposes thirteen read-only tools:
+Register it once with your agent and it exposes fourteen read-only tools:
 
 | Tool | Purpose |
 | --- | --- |
