@@ -447,6 +447,7 @@ Register it once with your agent and it exposes thirteen read-only tools:
 | `describe_migration_dependency` | Per-app migration DAG: roots, leaves, cross-app deps |
 | `suggest_indexes` | `Meta.indexes` proposals from observed QuerySet usage |
 | `signal_graph` | Sender→signal→handler graph from `@receiver` decorators and `signal.connect()` calls |
+| `migration_risk` | Dangerous schema changes in Django migrations & Alembic revisions (table locks, dropped columns) |
 | `blast_radius` | What a destructive migration hits: its risks, the code still reading it, the cascade fallout |
 | `drift` | `makemigrations --check` without booting Django — migrations diffed against `models.py` |
 | `impact` | Every reference to a field or model name, grouped by Django layer |
@@ -792,7 +793,7 @@ Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and type "ORM Lens":
 - [x] `impact <name>` — what still references a model or field, grouped by Django layer
 - [x] `blast-radius --stats` + `stats-sql` — optional production row counts from read-only SQL you run yourself (the tool never holds a DB credential)
 - [x] `nplusone` resolves across functions — a queryset returned by a helper is followed into the loop that consumes it
-- [x] `blast_radius`, `drift` and `impact` exposed as MCP tools — thirteen tools for AI agents
+- [x] `blast_radius`, `drift`, `impact` and `migration_risk` exposed as MCP tools — fourteen tools for AI agents
 - [x] `drift` documents its `!!` / `~` marks in the report and in `--help` — reported by [@sevdog](https://github.com/sevdog) ([#57](https://github.com/FROWNINGdev/orm-lens/issues/57))
 - [x] `drift` follows inheritance from abstract bases — an abstract base's fields count as the concrete child's own, as Django treats them — reported by [@sevdog](https://github.com/sevdog) ([#58](https://github.com/FROWNINGdev/orm-lens/issues/58))
 - [x] `suggest-index` recognises the indexes Django already made — primary key (`pk` and `id` are one lookup), `db_index`, `unique`, foreign keys, `unique_together`, `UniqueConstraint` — reported by [@sevdog](https://github.com/sevdog) ([#60](https://github.com/FROWNINGdev/orm-lens/issues/60)), same cause independently found by [@RinZ27](https://github.com/RinZ27) ([#61](https://github.com/FROWNINGdev/orm-lens/pull/61))
