@@ -364,9 +364,12 @@ class _RevisionAnalyzer:
         table = self._table(call, batch_table)
         if not self._populated(table):
             return
+        # `for t in [...]: op.drop_table(t)` drops a table that is only named
+        # at runtime; still a drop, but there is no name to print.
+        what = f"table '{table}'" if table else "a table named at runtime"
         self._add(
             call, "drop_table", "alembic_drop_table_breaks_running_code", table, None,
-            f"Drops table '{table}'; the previous release's models still query it, so every "
+            f"Drops {what}; the previous release's models still query it, so every "
             f"remaining instance fails until it is replaced.",
             "Remove the table from the models and deploy first; drop it in a later release.",
         )

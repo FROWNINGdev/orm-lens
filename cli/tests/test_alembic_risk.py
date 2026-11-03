@@ -143,6 +143,15 @@ def test_table_name_from_a_module_constant_is_resolved(tmp_path: Path) -> None:
     assert "'None'" not in f.description
 
 
+def test_drop_table_named_at_runtime_says_so(tmp_path: Path) -> None:
+    # Superset f92a3124dd66 drops leftover tables in a loop.
+    body = "    for table in ['a', 'b']:\n        op.drop_table(table)"
+    (f,) = _rules(tmp_path, body)["alembic_drop_table_breaks_running_code"]
+    assert f.model is None
+    assert "None" not in f.description
+    assert "named at runtime" in f.description
+
+
 def test_drop_table_in_the_base_or_after_create_table_is_silent(tmp_path: Path) -> None:
     assert "alembic_drop_table_breaks_running_code" not in _rules(
         tmp_path / "base", "    op.drop_table('orders')", base=True
