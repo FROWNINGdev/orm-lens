@@ -361,6 +361,7 @@ def _on_delete(node: ast.AST | None) -> str | None:
 @dataclass
 class _Column:
     field: ParsedField
+    column_key: str | None = None
     fk_target: str | None = None
     fk_class: str | None = None
     unique: bool = False
@@ -759,6 +760,12 @@ def _parse_column(
         field_.on_delete = ondelete
     return _Column(
         field=field_,
+        column_key=(
+            _const_str(kwargs.get("key"))
+            or (_const_str(call.args[0]) if call.args else None)
+            or _const_str(kwargs.get("name"))
+            or name
+        ),
         fk_target=fk_table,
         fk_class=fk_class,
         unique=unique,
@@ -1325,6 +1332,8 @@ def _copy_rel(rel: ParsedRelationship, inherited_from: str | None = None) -> Par
 
 def _apply_fk_constraints(c: _Class, cols: list[_Column]) -> None:
     by_name = {col.field.name: col for col in cols}
+    by_name.update({col.column_key: col for col in cols if col.column_key})
+    primary_keys = [col for col in cols if col.primary_key]
     for local, remote, ondelete in c.fk_constraints:
         if any(name not in by_name for name in local):
             continue
@@ -1338,7 +1347,8 @@ def _apply_fk_constraints(c: _Class, cols: list[_Column]) -> None:
         if col is None or col.field.is_relation:
             continue
         col.field.is_relation = True
-        col.field.relation_kind = "OneToOneField" if col.unique else "ForeignKey"
+        sole_pk = len(primary_keys) == 1 and primary_keys[0] is col
+        col.field.relation_kind = "OneToOneField" if col.unique or sole_pk else "ForeignKey"
         col.field.on_delete = ondelete
         col.fk_target = remote[0]
 

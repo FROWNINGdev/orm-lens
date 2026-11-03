@@ -73,6 +73,6 @@ Under `AsyncSession` a lazy load does not issue a query: it raises `MissingGreen
 ## Limits
 
 - Imperative mappings (`registry.map_imperatively`) and classes mapped to a `select()` are skipped or have no table name.
-- Composite `ForeignKeyConstraint`s draw one relation, carried by the first local column, with their `ondelete=` policy. The diagram does not expand the full column-pair mapping. Constraints with dynamic column names, missing local columns, or targets spanning multiple tables are skipped.
+- Composite `ForeignKeyConstraint`s draw one relation, carried by the first local column, with their `ondelete=` policy. Explicit column names and keys are resolved to their mapped attributes. DBML retains column types and primary-key markers. The diagram does not expand the full column-pair mapping. Constraints with dynamic column names, missing local columns, or targets spanning multiple tables are skipped.
 - Standalone `Table(...)` objects appear only as the association table of a many-to-many.
 - The N+1 detector does not follow a query through a repository method or into another module.
