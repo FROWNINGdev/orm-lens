@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`migration_risk` is an MCP tool of its own.** Agents working on FastAPI,
+  Flask or other Alembic projects can ask for migration risks without the
+  Django-only `blast_radius`: it returns the findings of Django migrations and
+  Alembic revisions in the `migration-risk --format json` shape, filtered by
+  `severity` (`critical` by default; an unknown value returns
+  `INVALID_SEVERITY`). A `pyproject.toml` with `[tool.alembic]` now counts as a
+  workspace. That makes fourteen MCP tools.
+  ([#197](https://github.com/FROWNINGdev/orm-lens/issues/197)) Contributed by
+  @christoferpedrosanchezzuzunaga-eng.
+
 - **Alembic: `op.drop_table` is flagged like `drop_column`.** The previous
   release's models keep querying a dropped table until every instance is
   replaced, so `alembic_drop_table_breaks_running_code` warns on a populated
