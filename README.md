@@ -60,7 +60,7 @@ Cold clone, broken venv, no settings module — you still see every app and mode
 |---|---|---|
 | **Editor user** (Django) — VS Code / Cursor / Windsurf / VSCodium | `code --install-extension frowningdev.django-orm-lens` | Field autocomplete in `.filter()`, sidebar tree, live ER diagram, hover cards, 18 lint rules with QuickFixes |
 | **Terminal / CI user** | `pip install orm-lens` | 17 subcommands, SARIF + PR annotations, pre-commit hooks, a GitHub Action |
-| **AI-agent user** — Cursor / Claude Code / Aider / Zed / Continue | `pip install "orm-lens[mcp]"` | 13 read-only MCP tools answering schema questions from ground truth |
+| **AI-agent user** — Cursor / Claude Code / Aider / Zed / Continue | `pip install "orm-lens[mcp]"` | 14 read-only MCP tools answering schema questions from ground truth |
 
 MCP setup is one JSON block — see [Integrations](#-integrations). Point `ORM_LENS_ROOT` at your project's absolute path.
 
