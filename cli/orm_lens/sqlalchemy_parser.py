@@ -604,7 +604,7 @@ def _parse_table_args(cls: _Class, value: ast.expr | None) -> None:
             continue
         local_names = [s for s in (_const_str(e) for e in local.elts) if s]
         remote_names = [s for s in (_const_str(e) for e in remote.elts) if s]
-        if local_names and remote_names:
+        if local_names and len(local_names) == len(local.elts) == len(remote_names) == len(remote.elts):
             cls.fk_constraints.append(
                 (local_names, remote_names, _on_delete(_kwargs(item).get("ondelete")))
             )
@@ -1326,8 +1326,14 @@ def _copy_rel(rel: ParsedRelationship, inherited_from: str | None = None) -> Par
 def _apply_fk_constraints(c: _Class, cols: list[_Column]) -> None:
     by_name = {col.field.name: col for col in cols}
     for local, remote, ondelete in c.fk_constraints:
-        if len(local) != 1:
-            continue  # composite keys: no single column to draw from
+        if any(name not in by_name for name in local):
+            continue
+        if len(local) > 1 and (
+            any("." not in target for target in remote)
+            or len({target.rsplit(".", 1)[0] for target in remote}) != 1
+        ):
+            continue
+        # Represent the whole constraint once, on its first local column.
         col = by_name.get(local[0])
         if col is None or col.field.is_relation:
             continue

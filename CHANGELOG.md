@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SQLAlchemy composite `ForeignKeyConstraint`s now appear once in ER diagrams,
+  using the first local column and preserving `ondelete=`. Incomplete or dynamic
+  constraints are skipped instead of inventing a relation. Fixes #208.
+
 ### Added
 
 - **`migration_risk` is an MCP tool of its own.** Agents working on FastAPI,
