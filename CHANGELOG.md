@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Alembic: `op.drop_table` is flagged like `drop_column`.** The previous
+  release's models keep querying a dropped table until every instance is
+  replaced, so `alembic_drop_table_breaks_running_code` warns on a populated
+  table, and stays quiet in the base revision and after a `create_table` in
+  the same revision. A table name held in a module constant
+  (`TABLE = "orders"; op.drop_table(TABLE)`) is now resolved for every rule.
+  ([#196](https://github.com/FROWNINGdev/orm-lens/issues/196)) Contributed by
+  @bfs2021.
+
 ### Fixed
 
 - **The extension package no longer carries the Python CLI.** Every VSIX
