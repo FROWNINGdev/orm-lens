@@ -10,8 +10,7 @@ from unittest import mock
 
 import pytest
 
-import orm_lens
-from orm_lens import workspace
+import orm_lens.workspace
 
 # The old names ship in the compat distribution (compat/django-orm-lens), which
 # CI does not pip-install; put its source on the path instead.
@@ -43,7 +42,7 @@ def test_old_submodule_imports_are_the_same_modules() -> None:
 
 def test_patching_through_the_old_path_reaches_the_real_module() -> None:
     with mock.patch("django_orm_lens.workspace._env", return_value="") as fake:
-        assert workspace._env is fake
+        assert orm_lens.workspace._env is fake
 
 
 def test_python_dash_m_old_name_runs_the_cli() -> None:
@@ -62,7 +61,7 @@ def test_env_vars_fall_back_to_the_pre_rename_names(tmp_path: Path) -> None:
     env = {k: v for k, v in os.environ.items() if "ORM_LENS_" not in k}
     env["DJANGO_ORM_LENS_ROOT"] = str(tmp_path)
     with mock.patch.dict(os.environ, env, clear=True):
-        assert workspace.resolve_workspace() == tmp_path.resolve()
+        assert orm_lens.workspace.resolve_workspace() == tmp_path.resolve()
         os.environ["ORM_LENS_ROOT"] = str(tmp_path / "missing")
         # The new name wins when both are set.
-        assert not isinstance(workspace.resolve_workspace(), Path)
+        assert not isinstance(orm_lens.workspace.resolve_workspace(), Path)
