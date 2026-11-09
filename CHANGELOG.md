@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **drift: `objects = models.Manager()` is no longer a model field.** Both parsers treated any `models.<Name>(...)` assignment as a field, so an explicit default manager showed up in `scan`, `describe`, ER diagrams, and, worst of all, blocking drift. `Manager` and `QuerySet` are skipped in both `cli/orm_lens/parser.py` and `src/parser.ts`, with the whole call skipped so multi-line declarations do not leak their arguments. `TaggableManager` stays a relation. The saleor golden snapshot drops the `objects` field that its `Category` model declares.
+
 ## [py-1.17.1] - 2026-11-05
 
 > The orm-lens-* pre-commit hooks exist, and the old name says it is old.
