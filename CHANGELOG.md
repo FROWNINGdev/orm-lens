@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **signals: `@receiver([post_save, post_delete], ...)` produces one edge per signal.** `signal_graph` read the first decorator argument as a single dotted name, so a list or tuple became one `<unknown>` `[custom]` edge and a list-form `post_delete` receiver vanished from the DB_CASCADE `skipped_receivers` warning. `_signal_arg_names` now returns one name per readable element, and the decorator branch adds one edge per name. `<unknown>` remains for the case where nothing is readable. `signal.connect()` is unchanged.
+
 ## [py-1.17.1] - 2026-11-05
 
 > The orm-lens-* pre-commit hooks exist, and the old name says it is old.
