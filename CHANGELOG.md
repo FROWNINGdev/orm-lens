@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`orm-lens er`: two models with the same class name stay two entities in
+  Mermaid** ([#223](https://github.com/FROWNINGdev/orm-lens/issues/223)).
+  Mermaid has one namespace for entity names, so `basket.Line` and
+  `order.Line` were drawn as one `Line` box with both apps' columns. A class
+  name defined in more than one app is now written as `<app>_<Model>`
+  (`basket_Line`, `order_Line`), and relation ends resolve to the model in
+  the field's own app, or the app named in the reference (`"order.Line"`).
+  Diagrams without duplicate names are unchanged.
+
 ## [py-1.17.1] - 2026-11-05
 
 > The orm-lens-* pre-commit hooks exist, and the old name says it is old.
