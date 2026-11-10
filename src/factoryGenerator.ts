@@ -140,14 +140,21 @@ function extractChoicesExpr(args: string): string | undefined {
   const m = /\bchoices\s*=\s*/.exec(args);
   if (!m) return undefined;
   const rest = args.slice(m.index + m[0].length);
+  // Only a plain name or bracket group can be read. Anything after it other
+  // than the next argument (a call, subscript or operator such as `+`) would
+  // make the iterator miss values, so leave the placeholder instead.
+  const endsExpr = (tail: string): boolean => {
+    const t = tail.trimStart();
+    return t === '' || t.startsWith(',');
+  };
   if (rest.startsWith('[') || rest.startsWith('(')) {
     const end = matchingBracket(rest);
-    return end < 0 ? undefined : rest.slice(0, end + 1);
+    if (end < 0 || !endsExpr(rest.slice(end + 1))) return undefined;
+    return rest.slice(0, end + 1);
   }
   const name = /^[A-Za-z_][\w.]*/.exec(rest)?.[0];
   if (!name) return undefined;
-  // A call such as get_status_choices() is not a name we can iterate.
-  if (rest.slice(name.length).trimStart().startsWith('(')) return undefined;
+  if (!endsExpr(rest.slice(name.length))) return undefined;
   return name;
 }
 

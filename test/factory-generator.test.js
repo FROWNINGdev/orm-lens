@@ -243,3 +243,28 @@ test('choices= call or grouped list keeps the Iterator TODO placeholder', () => 
   assert.match(code, /TODO: fill from get_status_choices/);
   assert.match(code, /media = factory\.Iterator\(\[\.\.\.\]\)/);
 });
+
+test('choices= expression that continues after the name or list keeps the placeholder', () => {
+  const model = {
+    name: 'Order',
+    appName: 'shop',
+    filePath: '/shop/models.py',
+    lineNumber: 1,
+    baseClasses: ['models.Model'],
+    meta: {},
+    fields: [
+      { name: 'status', type: 'CharField', args: 'max_length=20, choices=STATUS_CHOICES + EXTRA_CHOICES', isRelation: false, lineNumber: 2 },
+      { name: 'size', type: 'CharField', args: 'choices=[("s", "Small")] + OTHER, max_length=1', isRelation: false, lineNumber: 3 },
+      { name: 'stage', type: 'CharField', args: 'choices=STAGE_CHOICES[:2]', isRelation: false, lineNumber: 4 },
+      { name: 'kind', type: 'CharField', args: 'choices=Kind.choices , max_length=1', isRelation: false, lineNumber: 5 },
+    ],
+  };
+  const code = generateFactoryCode(model, indexOf(model));
+  assert.match(code, /status = factory\.Iterator\(\[\.\.\.\]\)/);
+  assert.match(code, /size = factory\.Iterator\(\[\.\.\.\]\)/);
+  assert.match(code, /stage = factory\.Iterator\(\[\.\.\.\]\)/);
+  assert.doesNotMatch(code, /in STATUS_CHOICES\]/);
+  assert.doesNotMatch(code, /in STAGE_CHOICES\]/);
+  assert.doesNotMatch(code, /Iterator\(\["s"\]\)/);
+  assert.match(code, /kind = factory\.Iterator\(Kind\.values\)/);
+});
