@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from orm_lens.drift import detect_drift
 from orm_lens.parser import scan_workspace
 
 BASKET_BASE = (
@@ -35,8 +36,20 @@ LINE_MODEL = (
 )
 
 
+MIGRATION = (
+    "from django.db import migrations, models\n\n\n"
+    "class Migration(migrations.Migration):\n"
+    "    dependencies = []\n"
+    "    operations = [\n"
+    '        migrations.CreateModel(name="Line", fields=[("{field}", '
+    'models.CharField(max_length=50))]),\n'
+    "    ]\n"
+)
+
+
 class SameNameAbstractBaseTest(unittest.TestCase):
     def test_subclass_inherits_from_own_app_base(self) -> None:
+        """A subclass in ``order/`` gets the ``order`` base's fields."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for app, base in (("basket", BASKET_BASE), ("order", ORDER_BASE)):
@@ -58,6 +71,7 @@ class SameNameAbstractBaseTest(unittest.TestCase):
             )
 
     def test_subclass_in_models_package_inherits_from_own_app_base(self) -> None:
+        """A subclass in ``order/models/`` gets the ``order`` base's fields."""
         # ``order/models/line.py`` sits one level deeper than the base in
         # ``order/abstract_models.py``; the same app must still win.
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,6 +93,27 @@ class SameNameAbstractBaseTest(unittest.TestCase):
             self.assertEqual(
                 sorted(f.name for f in lines["basket"].all_fields()), ["basket"]
             )
+
+
+class SameNameDriftTest(unittest.TestCase):
+    def test_issue_227_repro_reports_no_drift(self) -> None:
+        """``detect_drift`` on the issue #227 repro reports no drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for app, base, field in (
+                ("basket", BASKET_BASE, "basket"),
+                ("order", ORDER_BASE, "title"),
+            ):
+                (root / app / "migrations").mkdir(parents=True)
+                (root / app / "abstract_models.py").write_text(base, encoding="utf-8")
+                (root / app / "models.py").write_text(
+                    LINE_MODEL.format(app=app), encoding="utf-8"
+                )
+                (root / app / "migrations" / "0001_initial.py").write_text(
+                    MIGRATION.format(field=field), encoding="utf-8"
+                )
+            report = detect_drift(root)
+            self.assertEqual(report.drifted, [], report.drifted)
 
 
 if __name__ == "__main__":
