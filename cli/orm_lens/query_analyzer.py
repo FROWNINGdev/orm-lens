@@ -60,6 +60,29 @@ def _canonical_pk(field: str, pk_name: str) -> str:
     return prefix + (pk_name if body == "pk" else body)
 
 
+def _fk_column_aliases(model: Any) -> dict[str, str]:
+    """``{"category_id": "category"}`` for each ForeignKey / OneToOneField.
+
+    Django resolves a relation's column name and its field name to the same
+    column, in ``filter()`` and in ``Meta.indexes`` alike. Only real relations
+    of this model are mapped, and never over a field that is itself declared
+    with the ``_id`` name, so a plain ``external_id`` keeps its own name.
+    """
+    declared = {f.name for f in model.all_fields()}
+    return {
+        f"{f.name}_id": f.name
+        for f in model.all_fields()
+        if f.relation_kind in _SELF_INDEXED_RELATIONS and f"{f.name}_id" not in declared
+    }
+
+
+def _canonical_field(field: str, pk_name: str, fk_aliases: dict[str, str]) -> str:
+    """Fold ``pk`` and ``<fk>_id`` onto the field they name, keeping a ``-``."""
+    field = _canonical_pk(field, pk_name)
+    prefix, body = ("-", field[1:]) if field.startswith("-") else ("", field)
+    return prefix + fk_aliases.get(body, body)
+
+
 def _order_field(raw: str) -> str:
     """Normalise ``-created_at`` / ``created_at`` — keep the ``-`` prefix but
     strip any ``__`` lookup tail (rare but appears in ``order_by`` on JSONField)."""
@@ -305,12 +328,20 @@ def _indexed_single_fields(model: Any) -> set[str]:
 
 
 def _covered_field_groups(model: Any) -> list[list[str]]:
-    """Every multi-column index the model already declares, in Meta."""
+    """Every multi-column index the model already declares, in Meta.
+
+    ``<fk>_id`` column names are folded onto the relation's field name so a
+    group written either way matches the lookups (#225).
+    """
     meta = model.meta
+    aliases = _fk_column_aliases(model)
     return [
-        *_existing_meta_indexes(meta),
-        *_unique_together_tuples(meta),
-        *_unique_constraint_tuples(meta),
+        [aliases.get(f, f) for f in group]
+        for group in (
+            *_existing_meta_indexes(meta),
+            *_unique_together_tuples(meta),
+            *_unique_constraint_tuples(meta),
+        )
     ]
 
 
@@ -611,11 +642,13 @@ def suggest_indexes(
 
     # ``pk`` is an alias for the real primary-key column, so ``filter(pk=…)``
     # and ``filter(id=…)`` are the same lookup and must not be counted as two
-    # different fields (#60).
+    # different fields (#60). ``category_id`` and ``category`` are the same
+    # foreign-key column in the same way (#225).
     pk_name = primary_key_field(target_model)
+    fk_aliases = _fk_column_aliases(target_model)
     for bucket in (all_filter, all_exclude, all_get, all_order_by, all_aggregate):
         for row in bucket:
-            row["fields"] = [_canonical_pk(f, pk_name) for f in row["fields"]]
+            row["fields"] = [_canonical_field(f, pk_name, fk_aliases) for f in row["fields"]]
 
     filter_singles, filter_composites = _summarise_filter_like(
         all_filter + all_exclude + all_get
@@ -629,7 +662,7 @@ def suggest_indexes(
         filter_singles,
         filter_composites,
         order_by_summary,
-        existing,
+        [[fk_aliases.get(f, f) for f in group] for group in existing],
         already_indexed,
         _covered_field_groups(target_model),
     )

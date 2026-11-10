@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **suggest-indexes: `<fk>_id` and `<fk>` are the same column.** A
+  `Meta.indexes` entry written with the column name (`fields=["category_id",
+  "slug"]`) now covers `filter(category=..., slug=...)`, so the same index is
+  no longer proposed again, and `filter(category_id=...)` and
+  `filter(category=...)` are counted as one field. Only real ForeignKey /
+  OneToOneField names are folded; a plain `external_id` keeps its name (#225).
+
 ## [py-1.17.1] - 2026-11-05
 
 > The orm-lens-* pre-commit hooks exist, and the old name says it is old.
