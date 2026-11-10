@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nplusone / suggest-indexes: `models.Nap.objects` is a model.** Projects
+  that import the models module (`from core import models`) and write
+  `models.Nap.objects.filter(...)` now get the model resolved like
+  `Nap.objects.filter(...)`: a scalar field such as `nap.duration.seconds` no
+  longer gets `select_related` advice (a `FieldError` at runtime), a real
+  foreign key is reported at `high` confidence, and `suggest-indexes` counts
+  these filter sites (#222).
 - **suggest-indexes: `<fk>_id` and `<fk>` are the same column.** A
   `Meta.indexes` entry written with the column name (`fields=["category_id",
   "slug"]`) now covers `filter(category=..., slug=...)`, so the same index is
