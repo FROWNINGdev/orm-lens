@@ -57,6 +57,29 @@ class SameNameAbstractBaseTest(unittest.TestCase):
                 sorted(f.name for f in lines["basket"].all_fields()), ["basket"]
             )
 
+    def test_subclass_in_models_package_inherits_from_own_app_base(self) -> None:
+        # ``order/models/line.py`` sits one level deeper than the base in
+        # ``order/abstract_models.py``; the same app must still win.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for app, base in (("basket", BASKET_BASE), ("order", ORDER_BASE)):
+                (root / app / "models").mkdir(parents=True)
+                (root / app / "abstract_models.py").write_text(base, encoding="utf-8")
+                (root / app / "models" / "line.py").write_text(
+                    LINE_MODEL.format(app=app), encoding="utf-8"
+                )
+            index = scan_workspace(str(root))
+            lines = {
+                a.name: next(m for m in a.models if m.name == "Line")
+                for a in index.apps
+            }
+            self.assertEqual(
+                sorted(f.name for f in lines["order"].all_fields()), ["title"]
+            )
+            self.assertEqual(
+                sorted(f.name for f in lines["basket"].all_fields()), ["basket"]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

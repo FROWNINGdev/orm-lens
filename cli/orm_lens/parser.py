@@ -683,13 +683,19 @@ def _pick_base(
     """Choose which same-named class ``model``'s base refers to.
 
     A base in the subclass's own directory wins (``order/models.py`` →
-    ``order/abstract_models.py``); otherwise the first definition, as before.
+    ``order/abstract_models.py``). Failing that, a base in the same app
+    (``order/models/line.py`` → ``order/abstract_models.py``) wins. Otherwise
+    the first definition, as before.
     """
     if not candidates:
         return None
     here = Path(model.file_path).parent
     for c in candidates:
         if Path(c.file_path).parent == here:
+            return c
+    app_dir = _app_dir_for(model.file_path)[0]
+    for c in candidates:
+        if _app_dir_for(c.file_path)[0] == app_dir:
             return c
     return candidates[0]
 
