@@ -148,6 +148,26 @@ class ReplayTest(unittest.TestCase):
         state, _ = replay_app(self.migrations)
         self.assertEqual(state, {"post": {"title"}})
 
+    def test_state_operations_bound_to_a_module_level_name_are_replayed(self) -> None:
+        # Hand-written migrations hoist a shared list into a constant; the
+        # wrapper still has to be followed through the name.
+        (self.migrations / "0001_initial.py").write_text(
+            HEADER
+            + "STATE_OPERATIONS = [\n"
+            + "    migrations.CreateModel(name='Entry', fields=[('action', None)]),\n"
+            + "]\n\n\n"
+            + "class Migration(migrations.Migration):\n"
+            + "    dependencies = []\n"
+            + "    operations = [\n"
+            + "        migrations.SeparateDatabaseAndState(\n"
+            + "            state_operations=STATE_OPERATIONS,\n"
+            + "        ),\n"
+            + "    ]\n",
+            encoding="utf-8",
+        )
+        state, _ = replay_app(self.migrations)
+        self.assertEqual(state, {"entry": {"action"}})
+
     def test_delete_model_drops_it(self) -> None:
         self._write(
             "0001_initial.py",
