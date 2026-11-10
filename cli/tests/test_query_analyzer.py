@@ -202,5 +202,90 @@ class SuggestIndexesTest(unittest.TestCase):
             self.assertIn(["status"], [p["fields"] for p in result["proposed_indexes"]])
 
 
+_SHOP_MODELS = (
+    "from django.db import models\n"
+    "\n"
+    "\n"
+    "class Category(models.Model):\n"
+    "    title = models.CharField(max_length=50)\n"
+    "\n"
+    "\n"
+    "class Product(models.Model):\n"
+    "    category = models.ForeignKey(Category, on_delete=models.CASCADE)\n"
+    "    slug = models.SlugField()\n"
+    "    external_id = models.CharField(max_length=50)\n"
+    "\n"
+    "    class Meta:\n"
+    "        indexes = [\n"
+    "            models.Index(fields=[\"category_id\", \"slug\"], name=\"product_cat_slug\"),\n"
+    "        ]\n"
+)
+
+
+class ForeignKeyColumnAliasTest(unittest.TestCase):
+    """``<fk>_id`` and ``<fk>`` are the same column (#225)."""
+
+    def test_meta_index_on_fk_column_covers_field_name_lookups(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "shop" / "models.py", _SHOP_MODELS)
+            _write(
+                root / "shop" / "views.py",
+                "from .models import Product\n"
+                "def detail(category, slug):\n"
+                "    return Product.objects.get(category=category, slug=slug)\n"
+                "def exists(category, slug):\n"
+                "    return Product.objects.filter(category=category, slug=slug).exists()\n",
+            )
+
+            result = suggest_indexes("shop", "Product", str(root))
+
+            proposed = [sorted(p["fields"]) for p in result["proposed_indexes"]]
+            self.assertNotIn(["category", "slug"], proposed)
+            # Meta is reported as written.
+            self.assertEqual(result["existing_meta_indexes"], [["category_id", "slug"]])
+
+    def test_fk_column_and_field_name_lookups_count_as_one_field(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "shop" / "models.py", _SHOP_MODELS)
+            _write(
+                root / "shop" / "views.py",
+                "from .models import Product\n"
+                "def by_id(x):\n"
+                "    return Product.objects.filter(category_id=x)\n"
+                "def by_obj(y):\n"
+                "    return Product.objects.filter(category=y)\n"
+                "def ordered():\n"
+                "    return Product.objects.order_by('-category_id')\n",
+            )
+
+            result = suggest_indexes("shop", "Product", str(root))
+
+            fields = {u["field"]: u["sites"] for u in result["filter_usages"] if not u.get("composite")}
+            self.assertEqual(fields.get("category"), 2)
+            self.assertNotIn("category_id", fields)
+            self.assertEqual([r["field"] for r in result["order_by_usages"]], ["-category"])
+
+    def test_plain_field_ending_in_id_keeps_its_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "shop" / "models.py", _SHOP_MODELS)
+            _write(
+                root / "shop" / "views.py",
+                "from .models import Product\n"
+                "def a(x):\n"
+                "    return Product.objects.filter(external_id=x)\n"
+                "def b(x):\n"
+                "    return Product.objects.filter(external_id=x)\n",
+            )
+
+            result = suggest_indexes("shop", "Product", str(root))
+
+            fields = {u["field"]: u["sites"] for u in result["filter_usages"] if not u.get("composite")}
+            self.assertEqual(fields.get("external_id"), 2)
+            self.assertIn(["external_id"], [p["fields"] for p in result["proposed_indexes"]])
+
+
 if __name__ == "__main__":
     unittest.main()
