@@ -93,7 +93,7 @@ def _unwrap_call_chain(node: ast.Call) -> list[ast.Call]:
 def _chain_root(outermost: ast.Call) -> tuple[str, ast.Attribute] | None:
     """Return ``(ModelClassName, .objects_attr_node)`` for the leftmost
     ``<Model>.objects`` in the chain, or ``None`` if the chain doesn't start
-    with a ``<Name>.objects`` pattern.
+    with a ``<Name>.objects`` / ``<module>.<Name>.objects`` pattern.
     """
     cursor: ast.AST = outermost
     while isinstance(cursor, ast.Call):
@@ -105,13 +105,23 @@ def _chain_root(outermost: ast.Call) -> tuple[str, ast.Attribute] | None:
             cursor = inner
             continue
         # inner should be <Model>.objects
-        if (
-            isinstance(inner, ast.Attribute)
-            and inner.attr == "objects"
-            and isinstance(inner.value, ast.Name)
-        ):
-            return inner.value.id, inner
+        if isinstance(inner, ast.Attribute) and inner.attr == "objects":
+            model = _manager_owner_name(inner.value)
+            if model is not None:
+                return model, inner
         return None
+    return None
+
+
+def _manager_owner_name(node: ast.expr) -> str | None:
+    """Class name in front of ``.objects``: ``Nap`` for ``Nap.objects`` and
+    for ``models.Nap.objects`` / ``core.models.Nap.objects`` (projects that
+    import the models module instead of the classes).
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
     return None
 
 
@@ -901,12 +911,8 @@ def _chain_model_root(chain: list[tuple[str, ast.Call]]) -> str | None:
     if not isinstance(func, ast.Attribute):
         return None
     inner = func.value
-    if (
-        isinstance(inner, ast.Attribute)
-        and inner.attr == "objects"
-        and isinstance(inner.value, ast.Name)
-    ):
-        return inner.value.id
+    if isinstance(inner, ast.Attribute) and inner.attr == "objects":
+        return _manager_owner_name(inner.value)
     return None
 
 

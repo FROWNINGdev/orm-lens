@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **nplusone / suggest-indexes: `models.Nap.objects` is a model.** Projects
+  that import the models module (`from core import models`) and write
+  `models.Nap.objects.filter(...)` now get the model resolved like
+  `Nap.objects.filter(...)`: a scalar field such as `nap.duration.seconds` no
+  longer gets `select_related` advice (a `FieldError` at runtime), a real
+  foreign key is reported at `high` confidence, and `suggest-indexes` counts
+  these filter sites (#222).
+
 ## [py-1.17.1] - 2026-11-05
 
 > The orm-lens-* pre-commit hooks exist, and the old name says it is old.

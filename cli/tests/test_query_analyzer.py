@@ -177,6 +177,30 @@ class SuggestIndexesTest(unittest.TestCase):
             # …and the primary key is already indexed, so nothing is proposed.
             self.assertNotIn(["id"], [p["fields"] for p in result["proposed_indexes"]])
 
+    def test_model_reached_through_the_models_module_is_counted(self) -> None:
+        """``from orders import models`` + ``models.Order.objects.filter(...)``
+        (and the fully dotted ``orders.models.Order.objects``) are filter
+        sites for ``Order`` just like ``Order.objects.filter(...)``.
+        """
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_miniapp(root)
+            _write(
+                root / "views" / "dashboard.py",
+                "import orders.models\n"
+                "from orders import models\n"
+                "def a():\n"
+                "    return models.Order.objects.filter(status='paid')\n"
+                "def b():\n"
+                "    return orders.models.Order.objects.filter(status='shipped')\n",
+            )
+
+            result = suggest_indexes("orders", "Order", str(root))
+
+            fields = {u["field"]: u["sites"] for u in result["filter_usages"] if not u.get("composite")}
+            self.assertEqual(fields.get("status"), 2)
+            self.assertIn(["status"], [p["fields"] for p in result["proposed_indexes"]])
+
 
 if __name__ == "__main__":
     unittest.main()
