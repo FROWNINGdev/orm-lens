@@ -163,6 +163,32 @@ def _create_model_fields(call: ast.Call) -> list[str]:
     return names
 
 
+def _state_operations(elts: list[ast.expr]) -> list[ast.Call]:
+    """Flatten ``SeparateDatabaseAndState`` into the operations it wraps.
+
+    Django builds project state from ``state_operations`` only; the wrapper
+    is the standard way to move a model between apps or to change state
+    without touching the table. ``database_operations`` is SQL-only and must
+    not seed fields.
+    """
+    out: list[ast.Call] = []
+    for elt in elts:
+        if not isinstance(elt, ast.Call):
+            continue
+        if _op_name(elt) == "SeparateDatabaseAndState":
+            # Signature: (database_operations, state_operations) — real
+            # projects use the keyword form, but the positional one is cheap.
+            state_node = elt.args[1] if len(elt.args) > 1 else None
+            for kw in elt.keywords:
+                if kw.arg == "state_operations":
+                    state_node = kw.value
+            if isinstance(state_node, (ast.List, ast.Tuple)):
+                out.extend(_state_operations(state_node.elts))
+            continue
+        out.append(elt)
+    return out
+
+
 def _operations(tree: ast.AST) -> list[ast.Call]:
     """Every call inside a ``Migration.operations = [...]`` list."""
     out: list[ast.Call] = []
@@ -173,7 +199,7 @@ def _operations(tree: ast.AST) -> list[ast.Call]:
         if "operations" not in targets:
             continue
         if isinstance(node.value, (ast.List, ast.Tuple)):
-            out.extend(e for e in node.value.elts if isinstance(e, ast.Call))
+            out.extend(_state_operations(node.value.elts))
     return out
 
 
