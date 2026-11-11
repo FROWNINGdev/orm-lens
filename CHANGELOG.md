@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values`, a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
+
 ### Fixed
 
 - **A plain class above `if not is_model_registered(...)` no longer hides the
@@ -19,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   column-0 class too, unless it is inside a multi-line string (a docstring line
   such as `if needed, ...`). Column-0 comments and other column-0 text still
   stay in the body.
+- **Abstract bases with the same class name no longer swap fields.** When two
+  apps defined an abstract base with the same name (for example
+  `AbstractLine` in django-oscar's `basket` and `order` apps), every subclass
+  inherited the fields of whichever base was scanned first. A subclass now
+  inherits from the base in its own directory, and falls back to the first
+  definition as before.
 - **`orm-lens er`: two models with the same class name stay two entities in
   Mermaid** ([#223](https://github.com/FROWNINGdev/orm-lens/issues/223)).
   Mermaid has one namespace for entity names, so `basket.Line` and
