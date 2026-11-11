@@ -119,7 +119,7 @@ function choicesProvider(args: string): string {
   // TextChoices / IntegerChoices: Kind.choices → Kind.values
   const enumMatch = /^([A-Za-z_][\w]*)\.choices$/.exec(expr);
   if (enumMatch) {
-    return `factory.Iterator(${enumMatch[1]}.values)`;
+    return `factory.Iterator(${enumMatch[1]}.values)  # TODO: import ${enumMatch[1]} (or <Model>.${enumMatch[1]} if it is nested)`;
   }
 
   // A name or dotted name, e.g. STATUS_CHOICES or shop.STATUS_CHOICES.
