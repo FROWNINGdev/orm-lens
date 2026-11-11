@@ -677,9 +677,32 @@ def _is_abstract(model: ParsedModel) -> bool:
     return model.meta.get("abstract", "").strip() in ("True", "1", "true")
 
 
+def _pick_base(
+    candidates: list[ParsedModel], model: ParsedModel
+) -> ParsedModel | None:
+    """Choose which same-named class ``model``'s base refers to.
+
+    A base in the subclass's own directory wins (``order/models.py`` →
+    ``order/abstract_models.py``). Failing that, a base in the same app
+    (``order/models/line.py`` → ``order/abstract_models.py``) wins. Otherwise
+    the first definition, as before.
+    """
+    if not candidates:
+        return None
+    here = Path(model.file_path).parent
+    for c in candidates:
+        if Path(c.file_path).parent == here:
+            return c
+    app_dir = _app_dir_for(model.file_path)[0]
+    for c in candidates:
+        if _app_dir_for(c.file_path)[0] == app_dir:
+            return c
+    return candidates[0]
+
+
 def _abstract_bases_fields(
     model: ParsedModel,
-    by_name: dict[str, ParsedModel],
+    by_name: dict[str, list[ParsedModel]],
     stack: tuple[str, ...] = (),
 ) -> list[ParsedField]:
     """Fields ``model`` inherits from its abstract bases, parent-first.
@@ -700,7 +723,7 @@ def _abstract_bases_fields(
         tail = base.split(".")[-1]
         if tail in stack:
             continue
-        parent = by_name.get(tail)
+        parent = _pick_base(by_name.get(tail, []), model)
         if parent is None or parent is model or not _is_abstract(parent):
             continue
         contributed = [
@@ -726,11 +749,11 @@ def _attach_inherited_fields(all_defs: list[ParsedModel]) -> None:
     the list. A field the class declares itself shadows the inherited one of
     the same name, exactly as an override does in Django.
     """
-    by_name: dict[str, ParsedModel] = {}
+    by_name: dict[str, list[ParsedModel]] = {}
     for m in all_defs:
-        # First definition wins when two files declare the same class name;
-        # the parser has no import graph to disambiguate with.
-        by_name.setdefault(m.name, m)
+        # Keep every definition per name; ``_pick_base`` chooses one per
+        # subclass. The parser has no import graph to disambiguate with yet.
+        by_name.setdefault(m.name, []).append(m)
     for m in all_defs:
         own = {f.name for f in m.fields}
         m.inherited_fields = [
