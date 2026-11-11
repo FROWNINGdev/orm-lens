@@ -476,6 +476,15 @@ def parse_models_file(file_path: str, content: str) -> list[ParsedModel]:
     return _resolve_and_filter(_collect_defs(file_path, content))
 
 
+# Column-0 statements that can't be part of a column-0 class body: the block
+# headers ``_encloses_only_blocks`` walks through, plus ``def``, ``async def``
+# and decorators.
+_COLUMN0_STATEMENT_RE = re.compile(
+    r"^(?:(?:if|elif|while|for|try|with|async\s+(?:def|for|with)|def)\b"
+    r"|(?:else|except|finally)\b|@)"
+)
+
+
 def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
 
@@ -565,6 +574,14 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
             ):
                 break
             if re.match(r"^class\s+", inner) and not re.match(r"^\s+class", inner):
+                break
+            # A column-0 block opener (the swappable-model ``if``), function
+            # or decorator also ends a column-0 class. Without it the body of
+            # a plain class (``class OutOfStock(Exception)``) ran over every
+            # following ``if not is_model_registered(...)`` block and hid the
+            # models inside them (#226). Column-0 comments and blank lines
+            # still stay inside the body.
+            if not class_indent and _COLUMN0_STATEMENT_RE.match(inner):
                 break
             if not inner.strip():
                 j += 1
