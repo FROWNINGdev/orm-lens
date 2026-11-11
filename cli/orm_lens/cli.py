@@ -883,8 +883,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Also scan test modules (test_*.py, *_test.py, tests.py, conftest.py "
-            "and anything under tests/ or test/). Skipped by default: a query "
-            "per row in a test is not a production N+1"
+            "and anything under tests/ or test/). Skipped by default: a filter "
+            "that only a test runs should not drive a production index"
         ),
     )
     sidx.set_defaults(func=_cmd_suggest_indexes)
