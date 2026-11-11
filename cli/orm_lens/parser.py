@@ -485,6 +485,47 @@ _COLUMN0_STATEMENT_RE = re.compile(
 )
 
 
+def _lines_inside_strings(lines: Sequence[str]) -> frozenset[int]:
+    """Return the indexes of lines that start inside a multi-line string.
+
+    A light scanner, not ``tokenize``: model files that don't fully parse
+    still need a best-effort answer. It follows ``#`` comments, single and
+    triple quotes and backslash escapes, so a column-0 line of docstring
+    text such as ``if needed, ...`` isn't mistaken for a statement.
+    """
+    inside: set[int] = set()
+    quote = ""  # the open string's delimiter: ', ", ''' or """
+    for idx, line in enumerate(lines):
+        if quote:
+            inside.add(idx)
+        k = 0
+        n = len(line)
+        while k < n:
+            ch = line[k]
+            if quote:
+                if ch == "\\":
+                    k += 2
+                    continue
+                if line.startswith(quote, k):
+                    k += len(quote)
+                    quote = ""
+                    continue
+                k += 1
+                continue
+            if ch == "#":
+                break
+            if ch in "'\"":
+                triple = ch * 3
+                quote = triple if line.startswith(triple, k) else ch
+                k += len(quote)
+                continue
+            k += 1
+        # A single-quoted string only continues past a trailing backslash.
+        if len(quote) == 1 and not line.endswith("\\"):
+            quote = ""
+    return frozenset(inside)
+
+
 def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
 
@@ -504,6 +545,9 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     # detected. Line numbers are preserved (per-line expansion only).
     lines = [line.expandtabs(4) for line in content.splitlines()]
     all_defs: list[ParsedModel] = []
+    # Built on first use: only column-0 classes followed by a column-0
+    # statement-looking line need it.
+    in_string: frozenset[int] | None = None
     parent = os.path.basename(os.path.dirname(file_path))
     if parent == "models":
         app_name = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
@@ -580,9 +624,13 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
             # a plain class (``class OutOfStock(Exception)``) ran over every
             # following ``if not is_model_registered(...)`` block and hid the
             # models inside them (#226). Column-0 comments and blank lines
-            # still stay inside the body.
+            # still stay inside the body, and so do column-0 lines of a
+            # multi-line string, even when they start with ``if`` or ``for``.
             if not class_indent and _COLUMN0_STATEMENT_RE.match(inner):
-                break
+                if in_string is None:
+                    in_string = _lines_inside_strings(lines)
+                if j not in in_string:
+                    break
             if not inner.strip():
                 j += 1
                 continue

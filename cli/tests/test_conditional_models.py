@@ -258,6 +258,53 @@ class PlainClassBeforeBlocksTest(unittest.TestCase):
             [f.name for f in got[0].fields], ["number", "total", "status"]
         )
 
+    def test_column0_string_line_starting_with_a_keyword_stays_in_the_body(
+        self,
+    ) -> None:
+        """A docstring line like ``if needed, ...`` at column 0 isn't an ``if``."""
+        src = (
+            "from django.db import models\n"
+            "\n"
+            "class Order(models.Model):\n"
+            '    """Orders.\n'
+            "\n"
+            "if needed, the total is recomputed on save.\n"
+            "for example: Order(total=0)\n"
+            "@see Basket\n"
+            '"""\n'
+            "    number = models.CharField(max_length=32)\n"
+            "\n"
+            "    def describe(self):\n"
+            "        return '''\n"
+            "with a column-0 'with' line\n"
+            "'''\n"
+            "    status = models.CharField(max_length=16)\n"
+            "\n"
+            "def helper():\n"
+            "    other = models.IntegerField()\n"
+        )
+        got = parse_models_file("shop/models.py", src)
+        self.assertEqual([m.name for m in got], ["Order"])
+        self.assertEqual([f.name for f in got[0].fields], ["number", "status"])
+
+    def test_quotes_in_comments_and_strings_do_not_open_a_string(self) -> None:
+        """A quote inside a comment or a closed string doesn't hide a real ``if``."""
+        src = (
+            "from django.db import models\n"
+            "\n"
+            "class OutOfStock(Exception):\n"
+            "    # don't treat this apostrophe as a string\n"
+            "    msg = \"it's \\\" gone\"\n"
+            "\n"
+            "if True:\n"
+            "\n"
+            "    class Basket(models.Model):\n"
+            "        owner = models.CharField(max_length=50)\n"
+        )
+        got = parse_models_file("shop/models.py", src)
+        self.assertEqual([m.name for m in got], ["Basket"])
+        self.assertEqual([f.name for f in got[0].fields], ["owner"])
+
 
 if __name__ == "__main__":
     unittest.main()
