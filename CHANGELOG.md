@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [py-1.18.0] - 2026-11-11
 
-- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values` (with a `# TODO: import Kind` comment), a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
+> Fewer false drift alarms on django-oscar-style and moved models.
 
 ### Fixed
 
@@ -62,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filter(category=...)` are counted as one field. Only real ForeignKey /
   OneToOneField names are folded; a plain `external_id` keeps its name (#225).
 - **signals: `@receiver([post_save, post_delete], ...)` produces one edge per signal.** `signal_graph` read the first decorator argument as a single dotted name, so a list or tuple became one `<unknown>` `[custom]` edge and a list-form `post_delete` receiver vanished from the DB_CASCADE `skipped_receivers` warning. `_signal_arg_names` now returns one name per readable element, and the decorator branch adds one edge per name. `<unknown>` remains for the case where nothing is readable. `signal.connect()` is unchanged.
+- **drift: `objects = models.Manager()` is no longer a model field.** Both parsers treated any `models.<Name>(...)` assignment as a field, so an explicit default manager showed up in `scan`, `describe`, ER diagrams, and, worst of all, blocking drift. `Manager` and `QuerySet` are skipped in both `cli/orm_lens/parser.py` and `src/parser.ts`, with the whole call skipped so multi-line declarations do not leak their arguments. `TaggableManager` stays a relation. The saleor golden snapshot drops the `objects` field that its `Category` model declares.
+
+## [0.22.0] - 2026-11-11
+
+> Generated factories fill choices= fields with real values.
+
+### Added
+
+- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values` (with a `# TODO: import Kind` comment), a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
+
+### Fixed
+
 - **drift: `objects = models.Manager()` is no longer a model field.** Both parsers treated any `models.<Name>(...)` assignment as a field, so an explicit default manager showed up in `scan`, `describe`, ER diagrams, and, worst of all, blocking drift. `Manager` and `QuerySet` are skipped in both `cli/orm_lens/parser.py` and `src/parser.ts`, with the whole call skipped so multi-line declarations do not leak their arguments. `TaggableManager` stays a relation. The saleor golden snapshot drops the `objects` field that its `Category` model declares.
 
 ## [py-1.17.1] - 2026-11-05
