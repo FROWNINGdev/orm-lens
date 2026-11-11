@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values`, a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
+
 ### Fixed
 
 - **Abstract bases with the same class name no longer swap fields.** When two
