@@ -207,6 +207,7 @@ test('choices= Kind.choices uses Kind.values', () => {
   const code = generateFactoryCode(model, indexOf(model));
   assert.match(code, /kind = factory\.Iterator\(Kind\.values\)/);
   assert.doesNotMatch(code, /TODO: fill from Kind\.choices/);
+  assert.match(code, /TODO: import Kind \(or <Model>\.Kind if it is nested\)/);
 });
 
 test('choices= inline pairs use the first element of each pair', () => {

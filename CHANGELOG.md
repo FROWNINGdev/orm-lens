@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values`, a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
+- **Generate factory_boy factory: `choices=` fields get a real `factory.Iterator`.** `Kind.choices` becomes `Kind.values` (with a `# TODO: import Kind` comment), a named list such as `STATUS_CHOICES` becomes `[value for value, _label in STATUS_CHOICES]` (with a `# TODO: import ...` comment), and an inline list of pairs uses the first element of each pair. Calls and grouped choices still get the `[...]  # TODO` placeholder (#228).
 
 ### Fixed
 
@@ -23,7 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   column-0 class too, unless it is inside a multi-line string (a docstring line
   such as `if needed, ...`). Column-0 comments and other column-0 text still
   stay in the body.
-- **Abstract bases with the same class name no longer swap fields.** When two
+- **`orm-lens drift`: models created inside `SeparateDatabaseAndState` count as
+  migrated** ([#220](https://github.com/FROWNINGdev/orm-lens/issues/220)).
+  Replay read only the top-level operations, so a model moved between apps
+  through `state_operations` was reported as "declared but never migrated".
+  `state_operations` (a literal list, a tuple or a module-level name bound to
+  one) is now replayed; `database_operations` still never changes state.
+- **`suggest-indexes` skips test modules by default**
+  ([#224](https://github.com/FROWNINGdev/orm-lens/issues/224)). Filters that
+  only tests run no longer produce index proposals for production models.
+  `--include-tests` brings them back.
+- **Abstract bases with the same class name no longer swap fields**
+  ([#227](https://github.com/FROWNINGdev/orm-lens/issues/227)). When two
   apps defined an abstract base with the same name (for example
   `AbstractLine` in django-oscar's `basket` and `order` apps), every subclass
   inherited the fields of whichever base was scanned first. A subclass now
