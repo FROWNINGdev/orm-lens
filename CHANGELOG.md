@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plain class above `if not is_model_registered(...)` no longer hides the
+  models below it** ([#226](https://github.com/FROWNINGdev/orm-lens/issues/226)).
+  The body of a column-0 class only ended at the next column-0 `class`, so in
+  django-oscar's `basket/models.py` the `InvalidBasketLineError` exception
+  swallowed `Basket`, `Line` and `LineAttribute`, and `drift` reported them as
+  undeclared. A column-0 `if` / `elif` / `else` / `for` / `while` / `try` /
+  `except` / `finally` / `with` / `def` / `async` / decorator line now ends a
+  column-0 class too, unless it is inside a multi-line string (a docstring line
+  such as `if needed, ...`). Column-0 comments and other column-0 text still
+  stay in the body.
 - **`orm-lens drift`: models created inside `SeparateDatabaseAndState` count as
   migrated** ([#220](https://github.com/FROWNINGdev/orm-lens/issues/220)).
   Replay read only the top-level operations, so a model moved between apps
