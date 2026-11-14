@@ -205,6 +205,24 @@ class ReplayTest(unittest.TestCase):
         )
         self.assertEqual(replay_app(self.migrations)[0], {"post": {"title"}})
 
+    def test_hand_renamed_migration_keeps_its_place(self) -> None:
+        # Django loads any module in the package, so `0001b_` is a real
+        # migration. It has to replay *after* `0001_initial`: sorting it as -1
+        # puts it first and the CreateModel that follows resets the field set.
+        self._write(
+            "0001_initial.py",
+            '        migrations.CreateModel(name="CachedFile", fields=['
+            '("filename", None)]),\n',
+        )
+        self._write(
+            "0001b_add_session_key.py",
+            '        migrations.AddField(model_name="cachedfile",'
+            ' name="session_key", field=models.TextField(null=True)),\n',
+        )
+        state, replayed = replay_app(self.migrations)
+        self.assertEqual(replayed, 2)
+        self.assertEqual(state, {"cachedfile": {"filename", "session_key"}})
+
     def test_unparseable_migration_is_skipped_not_fatal(self) -> None:
         self._write(
             "0001_initial.py",

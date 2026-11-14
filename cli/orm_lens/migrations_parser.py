@@ -29,8 +29,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-MIGRATION_FILENAME_RE = re.compile(r"^\d{4}_.+\.py$")
-_MIGRATION_PREFIX_RE = re.compile(r"^(\d+)_")
+# Django's loader imports every module in the package whose name does not start
+# with "_" or "~", so a numeric prefix is not a reliable filter: hand-inserted
+# files such as ``0162b_auto_...py`` and legacy ``008_...py`` are real
+# migrations even though they do not start with four digits.
+MIGRATION_FILENAME_RE = re.compile(r"^[^_~].*\.py$")
+# The digits Django's autogenerator would have produced, even when a human
+# edited the rest of the name (``0162b_auto`` -> 162) or trimmed it (``008_x``).
+_MIGRATION_PREFIX_RE = re.compile(r"^(\d+)")
 
 # Skip patterns for filesystem walk (mirrors parser.py conventions).
 _SKIP_DIRS = frozenset(
