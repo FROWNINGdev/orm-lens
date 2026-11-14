@@ -668,16 +668,16 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
                     or (ftype if ftype in RELATION_TYPES else None)
                 )
                 is_rel = relation_kind is not None
+                inner = args_block.removesuffix(")")
                 field = ParsedField(
                     name=fname,
                     type=ftype,
-                    args=args_block.rstrip(")").strip(),
+                    args=inner.strip(),
                     is_relation=is_rel,
                     line_number=j,
                 )
                 if is_rel:
                     field.relation_kind = relation_kind  # type: ignore[assignment]
-                    inner = args_block.rstrip(")")
                     field.related_model = (
                         "taggit.Tag"
                         if ftype == "TaggableManager"

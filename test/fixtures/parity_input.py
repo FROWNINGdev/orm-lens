@@ -6,7 +6,7 @@ from django.db.models.functions import Lower
 
 class Author(models.Model):
     name = models.CharField(max_length=100)
-    aliases = ArrayField(ArrayField(models.TextField(), size=2), default=list)
+    aliases = ArrayField(ArrayField(models.TextField(), size=2))
     attributes = HStoreField(default=dict)
     years_active = IntegerRangeField(null=True)
     search_document = SearchVectorField(null=True)

@@ -60,7 +60,7 @@ test('parity fixture — model shape matches golden expectations', () => {
     ['normalized_name', 'GeneratedField'],
   ]);
   assert.ok(author.fields.every((field) => field.isRelation === false));
-  assert.equal(author.fields[1].args, 'ArrayField(models.TextField(), size=2), default=list');
+  assert.equal(author.fields[1].args, 'ArrayField(models.TextField(), size=2)');
 
   const book = models[1];
   assert.equal(book.fields.length, 4, 'title + author + editor + tags');

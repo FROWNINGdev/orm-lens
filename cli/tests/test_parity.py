@@ -64,7 +64,7 @@ class ParityFixtureTest(unittest.TestCase):
         )
         self.assertTrue(all(not f.is_relation for f in author.fields))
         self.assertEqual(
-            author.fields[1].args, "ArrayField(models.TextField(), size=2), default=list"
+            author.fields[1].args, "ArrayField(models.TextField(), size=2)"
         )
 
         book = models[1]
