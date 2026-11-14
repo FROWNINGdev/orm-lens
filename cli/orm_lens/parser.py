@@ -61,7 +61,8 @@ TREE_FIELD_ALIASES: dict[str, str] = {
 # class-header generics are vanishingly rare and don't warrant a full
 # bracket matcher.
 CLASS_RE = re.compile(
-    r"^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\(([^)]*)\)\s*:"
+    r"^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*"
+    r"(?:\(([^)]*)\))?\s*:"
 )
 CLASS_START_RE = re.compile(
     r"^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\("
@@ -475,7 +476,20 @@ def _encloses_only_blocks(lines: Sequence[str], idx: int, indent: int) -> bool:
     return True
 
 
-def _looks_like_model(base_classes: list[str]) -> bool:
+def _looks_like_model(
+    base_classes: list[str],
+    defined_names: frozenset[str] | set[str] = frozenset(),
+) -> bool:
+    """Does a base list identify a Django model from its names alone?
+
+    ``defined_names`` are the classes the caller has definitions for. A
+    ``*Mixin`` suffix is a guess for third-party bases the scanner cannot see;
+    when the base is defined in the analysed workspace that guess is skipped
+    and the base's own chain decides. A plain ``class BaseURLMixin:`` helper
+    must not turn its subclasses into models (issue #249), while a real
+    ``class TimeStampMixin(models.Model)`` is still seeded through its
+    ``models.Model`` base.
+    """
     for b in base_classes:
         tail = b.split(".")[-1]
         if NON_MODEL_TAIL.match(tail):
@@ -490,7 +504,7 @@ def _looks_like_model(base_classes: list[str]) -> bool:
             return True
         if re.match(r"^Abstract[A-Z]", tail):
             return True
-        if re.search(r"Mixin$", tail):
+        if re.search(r"Mixin$", tail) and tail not in defined_names:
             return True
     return False
 
@@ -641,7 +655,9 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
 
         model_name = class_match.group(1)
         base_classes = [
-            s.strip() for s in class_match.group(2).split(",") if s.strip()
+            s.strip()
+            for s in (class_match.group(2) or "").split(",")
+            if s.strip()
         ]
         # Drop classes whose ALL bases are known non-model tails
         # (ModelAdmin, Serializer, Manager, etc.) — they can't participate
@@ -901,7 +917,12 @@ def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
     base class defined in another file is found when the union is passed.
     """
     _attach_inherited_fields(all_defs)
-    is_model_name = {m.name for m in all_defs if _looks_like_model(m.base_classes)}
+    defined_names = {m.name for m in all_defs}
+    is_model_name = {
+        m.name
+        for m in all_defs
+        if _looks_like_model(m.base_classes, defined_names)
+    }
     changed = True
     while changed:
         changed = False
