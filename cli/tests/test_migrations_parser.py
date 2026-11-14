@@ -220,6 +220,26 @@ class NonStandardFilenameTest(unittest.TestCase):
             self.assertEqual(result["roots"], ["0001_initial"])
             self.assertEqual(result["leaves"], ["008_legacy"])
 
+    def test_helper_module_is_not_a_migration_node(self) -> None:
+        """Django imports any module in the package; only `Migration` is one."""
+        with TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "shop"
+            _write_migration(
+                app_dir,
+                "0001_initial",
+                "from django.db import migrations\n\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = []\n"
+                "    operations = []\n",
+            )
+            _write_migration(app_dir, "helpers", "NEW_FIELDS = []\n")
+            _init_py(app_dir)
+
+            result = describe_migration_dependency("shop", str(tmp))
+
+            self.assertEqual([m["name"] for m in result["migrations"]], ["0001_initial"])
+            self.assertEqual(result["leaves"], ["0001_initial"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -150,8 +150,39 @@ def _extract_dependency_pairs(deps_node: ast.AST) -> list[list[str]]:
     return pairs
 
 
+def _find_migration_class(tree: ast.Module) -> ast.ClassDef | None:
+    """The first ``class Migration`` in a parsed module, if there is one.
+
+    Django's loader imports every module in the package; helper modules that
+    only hold constants or mixins sit next to real migrations. They match the
+    filename filter but carry no ``Migration`` class, so they are not
+    migrations and must not join the graph.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Migration":
+            return node
+    return None
+
+
+def _migration_dependencies(cls: ast.ClassDef | None) -> list[list[str]]:
+    """``dependencies = [(app, name), ...]`` out of a ``Migration`` class body."""
+    if cls is None:
+        return []
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        if "dependencies" in targets:
+            return _extract_dependency_pairs(stmt.value)
+    return []
+
+
 def _parse_migration_file(path: Path) -> dict[str, Any] | None:
-    """Parse one migration file. Returns dict or ``None`` on unreadable/invalid."""
+    """Parse one migration file. Returns dict or ``None`` on unreadable/invalid.
+
+    A file with no ``class Migration`` is a helper module, not a migration:
+    returning ``None`` keeps it out of roots, leaves and the replay count.
+    """
     try:
         source = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -162,26 +193,21 @@ def _parse_migration_file(path: Path) -> dict[str, Any] | None:
         return None
 
     name = path.stem  # e.g. "0042_add_user_email"
-    dependencies: list[list[str]] = []
+    cls = _find_migration_class(tree)
+    if cls is None:
+        return None
+    dependencies: list[list[str]] = _migration_dependencies(cls)
     operations: list[str] = []
     replaces: list[list[str]] = []
 
-    for node in tree.body:
-        if not isinstance(node, ast.ClassDef):
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.Assign):
             continue
-        if node.name != "Migration":
-            continue
-        for stmt in node.body:
-            if not isinstance(stmt, ast.Assign):
-                continue
-            targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
-            if "dependencies" in targets:
-                dependencies = _extract_dependency_pairs(stmt.value)
-            elif "operations" in targets:
-                operations = _extract_operation_names(stmt.value)
-            elif "replaces" in targets:
-                replaces = _extract_dependency_pairs(stmt.value)
-        break  # only the first class named Migration counts
+        targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        if "operations" in targets:
+            operations = _extract_operation_names(stmt.value)
+        elif "replaces" in targets:
+            replaces = _extract_dependency_pairs(stmt.value)
 
     out: dict[str, Any] = {
         "name": name,

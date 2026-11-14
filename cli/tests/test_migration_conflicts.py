@@ -107,6 +107,25 @@ class MigrationConflictTests(unittest.TestCase):
         )
         self.assertEqual(_conflicts(root), [])
 
+    def test_helper_module_is_not_a_leaf(self) -> None:
+        """Django imports every module in the package; only `Migration` counts.
+
+        A constants/mixins module beside a linear history used to parse as one
+        more root with no dependents — an extra leaf, i.e. a critical
+        `conflicting_migration_leaves` finding for a healthy app.
+        """
+        root = _project(
+            [
+                ("0001_initial.py", "[]"),
+                ("0002_add_slug.py", "[('shop', '0001_initial')]"),
+            ]
+        )
+        (Path(root) / "shop" / "migrations" / "helpers.py").write_text(
+            "from django.db import migrations\n\n\nNEW_FIELDS = []\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(_conflicts(root), [])
+
     def test_merge_migration_resolves_the_conflict(self) -> None:
         """The fix must not keep reporting the problem."""
         root = _project(
