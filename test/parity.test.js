@@ -51,10 +51,16 @@ test('parity fixture — model shape matches golden expectations', () => {
   }
 
   const author = models[0];
-  assert.equal(author.fields.length, 1);
-  assert.equal(author.fields[0].name, 'name');
-  assert.equal(author.fields[0].type, 'CharField');
-  assert.equal(author.fields[0].isRelation, false);
+  assert.deepEqual(author.fields.map(({ name, type }) => [name, type]), [
+    ['name', 'CharField'],
+    ['aliases', 'ArrayField'],
+    ['attributes', 'HStoreField'],
+    ['years_active', 'IntegerRangeField'],
+    ['search_document', 'SearchVectorField'],
+    ['normalized_name', 'GeneratedField'],
+  ]);
+  assert.ok(author.fields.every((field) => field.isRelation === false));
+  assert.equal(author.fields[1].args, 'ArrayField(models.TextField(), size=2), default=list');
 
   const book = models[1];
   assert.equal(book.fields.length, 4, 'title + author + editor + tags');

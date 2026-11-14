@@ -51,10 +51,21 @@ class ParityFixtureTest(unittest.TestCase):
             self.assertEqual(m.app_name, "fixtures", f"{m.name}: app_name derived from parent dir")
 
         author = models[0]
-        self.assertEqual(len(author.fields), 1)
-        self.assertEqual(author.fields[0].name, "name")
-        self.assertEqual(author.fields[0].type, "CharField")
-        self.assertFalse(author.fields[0].is_relation)
+        self.assertEqual(
+            [(f.name, f.type) for f in author.fields],
+            [
+                ("name", "CharField"),
+                ("aliases", "ArrayField"),
+                ("attributes", "HStoreField"),
+                ("years_active", "IntegerRangeField"),
+                ("search_document", "SearchVectorField"),
+                ("normalized_name", "GeneratedField"),
+            ],
+        )
+        self.assertTrue(all(not f.is_relation for f in author.fields))
+        self.assertEqual(
+            author.fields[1].args, "ArrayField(models.TextField(), size=2), default=list"
+        )
 
         book = models[1]
         self.assertEqual(len(book.fields), 4, "title + author + editor + tags")
