@@ -109,6 +109,65 @@ class PlainMixinIsNotAModelTest(unittest.TestCase):
         )
 
 
+class AliasedWorkspaceMixinTest(unittest.TestCase):
+    def test_aliased_import_is_resolved_before_the_mixin_guess(self) -> None:
+        # ``StateMixin`` is the local binding for the workspace class
+        # ``StateQuerySetMixin``. The definition set stores the original name,
+        # so the lookup has to follow the import alias or the subclass is
+        # still guessed to be a model (#249 follow-up).
+        models = """
+from django.db import models
+
+from .mixins import StateQuerySetMixin as StateMixin
+
+
+class ProjectQuerySet(models.QuerySet):
+    pass
+
+
+class ProjectQuerySetWithState(StateMixin, ProjectQuerySet):
+    pass
+
+
+class Project(models.Model):
+    title = models.CharField(max_length=100)
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "projects" / "mixins.py", LABEL_STUDIO_MIXINS)
+            _write(root / "projects" / "models.py", models)
+            index = scan_workspace(str(root))
+            names = {m.name for a in index.apps for m in a.models}
+        self.assertEqual(names, {"Project"})
+
+
+class WorkspaceWideNameDoesNotHideThirdPartyMixinTest(unittest.TestCase):
+    def test_unresolvable_mixin_falls_back_to_the_suffix_guess(self) -> None:
+        # app_a's plain AuditMixin must not make app_b's third-party
+        # AuditMixin look like a workspace class: from app_b/models.py that
+        # name does not resolve, so Record is still guessed to be a model.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "app_a" / "models.py",
+                "class AuditMixin:\n"
+                "    def audit(self):\n"
+                "        return self\n",
+            )
+            _write(
+                root / "app_b" / "models.py",
+                "from django.db import models\n"
+                "from thirdparty.mixins import AuditMixin\n"
+                "\n"
+                "class Record(AuditMixin):\n"
+                "    title = models.CharField(max_length=100)\n",
+            )
+            index = scan_workspace(str(root))
+            models = {m.name: m for a in index.apps for m in a.models}
+        self.assertEqual(sorted(models), ["Record"])
+        self.assertEqual([f.name for f in models["Record"].fields], ["title"])
+
+
 class AbstractModelMixinStillRecognisedTest(unittest.TestCase):
     def test_abstract_model_mixin_still_makes_its_subclass_a_model(self) -> None:
         src = (

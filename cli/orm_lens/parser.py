@@ -24,7 +24,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import Path
@@ -478,15 +478,15 @@ def _encloses_only_blocks(lines: Sequence[str], idx: int, indent: int) -> bool:
 
 def _looks_like_model(
     base_classes: list[str],
-    defined_names: frozenset[str] | set[str] = frozenset(),
+    is_workspace_defined: Callable[[str], bool] | None = None,
 ) -> bool:
     """Does a base list identify a Django model from its names alone?
 
-    ``defined_names`` are the classes the caller has definitions for. A
-    ``*Mixin`` suffix is a guess for third-party bases the scanner cannot see;
-    when the base is defined in the analysed workspace that guess is skipped
-    and the base's own chain decides. A plain ``class BaseURLMixin:`` helper
-    must not turn its subclasses into models (issue #249), while a real
+    A ``*Mixin`` suffix is a guess for third-party bases the scanner cannot
+    see. When ``is_workspace_defined`` resolves the base to a class defined in
+    the analysed workspace, that guess is skipped and the base's own chain
+    decides. A plain ``class BaseURLMixin:`` helper must not turn its
+    subclasses into models (issue #249), while a real
     ``class TimeStampMixin(models.Model)`` is still seeded through its
     ``models.Model`` base.
     """
@@ -504,7 +504,9 @@ def _looks_like_model(
             return True
         if re.match(r"^Abstract[A-Z]", tail):
             return True
-        if re.search(r"Mixin$", tail) and tail not in defined_names:
+        if re.search(r"Mixin$", tail):
+            if is_workspace_defined is not None and is_workspace_defined(b):
+                continue
             return True
     return False
 
@@ -847,10 +849,28 @@ def _pick_base(
     return candidates[0]
 
 
+def _resolved_base_name(
+    model: ParsedModel,
+    base: str,
+    resolver: _WorkspaceResolver | None,
+) -> str:
+    """Class name that ``base`` refers to, following imports when possible.
+
+    Falls back to the base's tail name for third-party bases and for the
+    single-file ``parse_models_file`` path, where there is no import graph.
+    """
+    if resolver is not None:
+        found = resolver.resolve(Path(model.file_path), base)
+        if found is not None:
+            return found.name
+    return base.split(".")[-1]
+
+
 def _abstract_bases_fields(
     model: ParsedModel,
     by_name: dict[str, list[ParsedModel]],
     stack: tuple[str, ...] = (),
+    resolver: _WorkspaceResolver | None = None,
 ) -> list[ParsedField]:
     """Fields ``model`` inherits from its abstract bases, parent-first.
 
@@ -867,14 +887,16 @@ def _abstract_bases_fields(
     out: list[ParsedField] = []
     taken: set[str] = set()
     for base in model.base_classes:
-        tail = base.split(".")[-1]
-        if tail in stack:
+        target = _resolved_base_name(model, base, resolver)
+        if target in stack:
             continue
-        parent = _pick_base(by_name.get(tail, []), model)
+        parent = _pick_base(by_name.get(target, []), model)
         if parent is None or parent is model or not _is_abstract(parent):
             continue
         contributed = [
-            *_abstract_bases_fields(parent, by_name, (*stack, tail)),
+            *_abstract_bases_fields(
+                parent, by_name, (*stack, target), resolver
+            ),
             *(
                 replace(f, inherited_from=f.inherited_from or parent.name)
                 for f in parent.fields
@@ -888,7 +910,10 @@ def _abstract_bases_fields(
     return out
 
 
-def _attach_inherited_fields(all_defs: list[ParsedModel]) -> None:
+def _attach_inherited_fields(
+    all_defs: list[ParsedModel],
+    resolver: _WorkspaceResolver | None = None,
+) -> None:
     """Populate ``inherited_fields`` on every def, in place.
 
     Runs before the abstract classes are dropped — they are the only source
@@ -899,29 +924,58 @@ def _attach_inherited_fields(all_defs: list[ParsedModel]) -> None:
     by_name: dict[str, list[ParsedModel]] = {}
     for m in all_defs:
         # Keep every definition per name; ``_pick_base`` chooses one per
-        # subclass. The parser has no import graph to disambiguate with yet.
+        # subclass. The resolver supplies the import graph for aliases.
         by_name.setdefault(m.name, []).append(m)
     for m in all_defs:
         own = {f.name for f in m.fields}
         m.inherited_fields = [
-            f for f in _abstract_bases_fields(m, by_name) if f.name not in own
+            f
+            for f in _abstract_bases_fields(m, by_name, resolver=resolver)
+            if f.name not in own
         ]
 
 
-def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
+def _resolve_and_filter(
+    all_defs: list[ParsedModel],
+    resolver: _WorkspaceResolver | None = None,
+) -> list[ParsedModel]:
     """Pass 2: transitive model resolution + abstract drop over ``all_defs``.
 
     ``all_defs`` may come from a single file (``parse_models_file``) or the
     union of every file in a scan (``scan_workspace``) — resolution matches
     each base's tail name against whatever definitions are present, so a
     base class defined in another file is found when the union is passed.
+
+    A ``*Mixin`` base only suppresses the suffix guess when it resolves to a
+    workspace class *from the subclass's own module*: a class in the same
+    file, or one reached through that file's imports (including aliases).
+    A same-named class elsewhere in the workspace must not hide a third-party
+    mixin the scanner cannot see (a false negative).
     """
-    _attach_inherited_fields(all_defs)
-    defined_names = {m.name for m in all_defs}
+    _attach_inherited_fields(all_defs, resolver)
+    if resolver is None:
+        names_by_file: dict[str, set[str]] = {}
+        for m in all_defs:
+            names_by_file.setdefault(m.file_path, set()).add(m.name)
+
+        def is_workspace_defined(model: ParsedModel, base: str) -> bool:
+            return base.split(".")[-1] in names_by_file.get(model.file_path, ())
+    else:
+
+        def is_workspace_defined(model: ParsedModel, base: str) -> bool:
+            return resolver.resolve(Path(model.file_path), base) is not None
+
     is_model_name = {
         m.name
         for m in all_defs
-        if _looks_like_model(m.base_classes, defined_names)
+        if _looks_like_model(
+            m.base_classes,
+            lambda b, _m=m: is_workspace_defined(_m, b),
+        )
+    }
+    resolved_bases = {
+        id(m): [_resolved_base_name(m, b, resolver) for b in m.base_classes]
+        for m in all_defs
     }
     changed = True
     while changed:
@@ -929,9 +983,8 @@ def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
         for m in all_defs:
             if m.name in is_model_name:
                 continue
-            for b in m.base_classes:
-                tail = b.split(".")[-1]
-                if tail in is_model_name:
+            for target in resolved_bases[id(m)]:
+                if target in is_model_name:
                     is_model_name.add(m.name)
                     changed = True
                     break
@@ -1019,30 +1072,37 @@ def _module_files(module: str, from_file: str, root: Path) -> list[Path]:
     return out
 
 
-def _pull_imported_bases(
-    all_defs: list[ParsedModel], root: Path, excludes: Sequence[str]
-) -> list[ParsedModel]:
-    """Definitions of base classes that live outside the scanned model files.
+class _WorkspaceResolver:
+    """Per-file import bindings and class defs for resolving base names.
 
-    The scan reads ``models.py``-style files only, so ``class Person(MyBase)``
-    with ``MyBase`` in ``core/base.py`` had nothing to resolve against and
-    ``Person`` vanished (issue #135). This follows the subclass's own imports
-    to the file that defines each unknown base — through re-exports and
-    relative imports — and returns those classes so ``_resolve_and_filter``
-    sees the whole chain. Only classes something actually inherits from are
-    pulled, so helpers sharing that file never show up as models.
+    Each module is cached as ``(defs_by_name, imports)``, where ``imports`` is
+    the local binding map from :func:`_parse_imports`. That map is what makes
+    an aliased base resolve: ``from .mixins import StateQuerySetMixin as
+    StateMixin`` binds ``StateMixin`` to the original name and module, so the
+    definition is found instead of guessed at by suffix. Modules outside
+    ``root`` or matching an exclude are never read.
     """
-    loaded: dict[Path, tuple[dict[str, ParsedModel], dict] | None] = {}
 
-    def load(path: Path) -> tuple[dict[str, ParsedModel], dict] | None:
-        if path in loaded:
-            return loaded[path]
-        loaded[path] = None
+    def __init__(self, root: Path, excludes: Sequence[str]) -> None:
+        self.root = root
+        self.excludes = excludes
+        self.loaded: dict[
+            Path,
+            tuple[dict[str, ParsedModel], dict[str, tuple[str, str | None]]] | None,
+        ] = {}
+
+    def load(
+        self, path: Path
+    ) -> tuple[dict[str, ParsedModel], dict[str, tuple[str, str | None]]] | None:
+        path = path.resolve()
+        if path in self.loaded:
+            return self.loaded[path]
+        self.loaded[path] = None
         try:
-            rel = path.relative_to(root).as_posix()
+            rel = path.relative_to(self.root).as_posix()
         except ValueError:
             return None
-        if any(fnmatch(rel, pat) for pat in excludes) or not path.is_file():
+        if any(fnmatch(rel, pat) for pat in self.excludes) or not path.is_file():
             return None
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
@@ -1054,11 +1114,18 @@ def _pull_imported_bases(
                     defs.setdefault(d.name, d)
         except Exception:
             return None
-        loaded[path] = (defs, _parse_imports(content))
-        return loaded[path]
+        self.loaded[path] = (defs, _parse_imports(content))
+        return self.loaded[path]
 
-    def find(path: Path, base: str, hops: int) -> ParsedModel | None:
-        entry = load(path)
+    def resolve(self, path: Path, base: str, hops: int = 0) -> ParsedModel | None:
+        """Follow ``base`` from ``path`` through imports to a class def.
+
+        ``base`` may be a bare name, an aliased import, or a dotted
+        ``module.Name`` / ``pkg.module.Name`` reference. Re-exports are
+        followed up to :data:`_MAX_IMPORT_HOPS`; anything that escapes the
+        workspace resolves to ``None``.
+        """
+        entry = self.load(path)
         if entry is None or hops > _MAX_IMPORT_HOPS:
             return None
         defs, imports = entry
@@ -1080,25 +1147,52 @@ def _pull_imported_bases(
                 module = _join_module(head[0], head[1])
             for part in qual[1:]:
                 module = _join_module(module, part)
-        for candidate in _module_files(module, str(path), root):
-            found = find(candidate, name, hops + 1)
+        for candidate in _module_files(module, str(path), self.root):
+            found = self.resolve(candidate, name, hops + 1)
             if found is not None:
                 return found
         return None
 
-    known = {m.name for m in all_defs}
+
+def _pull_imported_bases(
+    all_defs: list[ParsedModel],
+    root: Path,
+    excludes: Sequence[str],
+    resolver: _WorkspaceResolver | None = None,
+) -> list[ParsedModel]:
+    """Definitions of base classes that live outside the scanned model files.
+
+    The scan reads ``models.py``-style files only, so ``class Person(MyBase)``
+    with ``MyBase`` in ``core/base.py`` had nothing to resolve against and
+    ``Person`` vanished (issue #135). This follows the subclass's own imports
+    to the file that defines each unknown base — through re-exports and
+    relative imports — and returns those classes so ``_resolve_and_filter``
+    sees the whole chain. Only classes something actually inherits from are
+    pulled, so helpers sharing that file never show up as models.
+    """
+    if resolver is None:
+        resolver = _WorkspaceResolver(root, excludes)
+
+    # Identity is (file, class), not just the class name: the same name may be
+    # defined in several apps, and an import decides which one a base means.
+    known_defs = {
+        (Path(m.file_path).resolve(), m.name) for m in all_defs
+    }
     queue = [(m.file_path, b) for m in all_defs for b in m.base_classes]
     asked: set[tuple[str, str]] = set()
     pulled: list[ParsedModel] = []
     while queue:
         file_path, base = queue.pop()
-        if base.split(".")[-1] in known or (file_path, base) in asked:
+        if (file_path, base) in asked:
             continue
         asked.add((file_path, base))
-        found = find(Path(file_path).resolve(), base, 0)
-        if found is None or found.name in known:
+        found = resolver.resolve(Path(file_path).resolve(), base)
+        if found is None:
             continue
-        known.add(found.name)
+        key = (Path(found.file_path).resolve(), found.name)
+        if key in known_defs:
+            continue
+        known_defs.add(key)
         pulled.append(found)
         queue.extend((found.file_path, b) for b in found.base_classes)
     return pulled
@@ -1197,9 +1291,12 @@ def scan_workspace(
                 file=sys.stderr,
             )
             continue
-    all_defs.extend(_pull_imported_bases(all_defs, root_path, exclude_globs))
+    resolver = _WorkspaceResolver(root_path, exclude_globs)
+    all_defs.extend(
+        _pull_imported_bases(all_defs, root_path, exclude_globs, resolver)
+    )
 
-    found = _resolve_and_filter(all_defs)
+    found = _resolve_and_filter(all_defs, resolver)
     # Finding SQLAlchemy models means reading every file, which a big Django
     # project should not pay for: look only when there are no Django models
     # or the project declares SQLAlchemy.
