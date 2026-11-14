@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns at most one row, so the rest of the index never pays for its
   writes. `db_index=True` fields stay eligible.
 
+- **migration-risk: no more `app.None` in text output for graph-level findings**
+  ([#268](https://github.com/FROWNINGdev/orm-lens/issues/268)).
+  `conflicting_migration_leaves` / `alembic_multiple_heads` now print
+  `(migration graph) shop` instead of `shop.None`.
 - **suggest-indexes: only propose indexes on local columns**
   ([#252](https://github.com/FROWNINGdev/orm-lens/issues/252)).
   Many-to-many and reverse relation lookups still appear in usage counts,
