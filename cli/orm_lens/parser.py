@@ -387,24 +387,46 @@ def _extract_through_model_regex(args_block: str) -> str | None:
 
 
 def _read_balanced_args(lines: Sequence[str], start: int):
-    if "(" not in lines[start]:
+    open_idx = lines[start].find("(")
+    if open_idx == -1:
         return "", start
-    open_idx = lines[start].index("(")
-    depth = 0
+
+    depth = 1
+    quote = ""
     parts: list[str] = []
     for i in range(start, len(lines)):
-        src = lines[i][open_idx:] if i == start else lines[i]
-        for ch in src:
-            if ch == "(":
+        src = lines[i][open_idx + 1 :] if i == start else lines[i]
+        k = 0
+        while k < len(src):
+            ch = src[k]
+            if quote:
+                if ch == "\\":
+                    k += 2
+                    continue
+                if src.startswith(quote, k):
+                    k += len(quote)
+                    quote = ""
+                    continue
+            elif ch == "#":
+                break
+            elif ch in "'\"":
+                triple = ch * 3
+                quote = triple if src.startswith(triple, k) else ch
+                k += len(quote)
+                continue
+            elif ch == "(":
                 depth += 1
             elif ch == ")":
                 depth -= 1
                 if depth == 0:
-                    parts.append(")")
-                    return "".join(parts).lstrip("("), i
-            parts.append(ch)
-        parts.append("\n")
-    return "".join(parts).lstrip("("), len(lines) - 1
+                    parts.append(src[: k + 1])
+                    return "".join(parts), i
+            k += 1
+        # A single-quoted string can continue only via an escaped newline.
+        if len(quote) == 1 and k <= len(src):
+            quote = ""
+        parts.extend((src, "\n"))
+    return "".join(parts), len(lines) - 1
 
 
 def _encloses_only_blocks(lines: Sequence[str], idx: int, indent: int) -> bool:

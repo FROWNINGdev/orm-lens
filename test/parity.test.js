@@ -54,6 +54,9 @@ test('parity fixture — model shape matches golden expectations', () => {
   assert.deepEqual(author.fields.map(({ name, type }) => [name, type]), [
     ['name', 'CharField'],
     ['aliases', 'ArrayField'],
+    ['tags', 'ArrayField'],
+    ['punctuation', 'CharField'],
+    ['blurb', 'TextField'],
     ['attributes', 'HStoreField'],
     ['years_active', 'IntegerRangeField'],
     ['search_document', 'SearchVectorField'],
@@ -61,6 +64,10 @@ test('parity fixture — model shape matches golden expectations', () => {
   ]);
   assert.ok(author.fields.every((field) => field.isRelation === false));
   assert.equal(author.fields[1].args, 'ArrayField(models.TextField(), size=2)');
+
+  assert.equal(author.fields[2].args, 'models.CharField(max_length=10, default="(")');
+  assert.equal(author.fields[3].args, String.raw`max_length=10, default='it\'s )'`);
+  assert.equal(author.fields[4].args, 'default="""first (\nsecond (\n"""');
 
   const book = models[1];
   assert.equal(book.fields.length, 4, 'title + author + editor + tags');

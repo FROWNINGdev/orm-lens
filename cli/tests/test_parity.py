@@ -56,6 +56,9 @@ class ParityFixtureTest(unittest.TestCase):
             [
                 ("name", "CharField"),
                 ("aliases", "ArrayField"),
+                ("tags", "ArrayField"),
+                ("punctuation", "CharField"),
+                ("blurb", "TextField"),
                 ("attributes", "HStoreField"),
                 ("years_active", "IntegerRangeField"),
                 ("search_document", "SearchVectorField"),
@@ -66,6 +69,10 @@ class ParityFixtureTest(unittest.TestCase):
         self.assertEqual(
             author.fields[1].args, "ArrayField(models.TextField(), size=2)"
         )
+
+        self.assertEqual(author.fields[2].args, 'models.CharField(max_length=10, default="(")')
+        self.assertEqual(author.fields[3].args, r"max_length=10, default='it\'s )'")
+        self.assertEqual(author.fields[4].args, 'default="""first (\nsecond (\n"""')
 
         book = models[1]
         self.assertEqual(len(book.fields), 4, "title + author + editor + tags")
