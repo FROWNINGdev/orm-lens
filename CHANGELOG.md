@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists/tuples passed by keyword now retain their names and built-in markers
   instead of appearing as `<unknown>` custom edges (#248).
 
+- **signals: resolve aliased `receiver` imports.** Imports such as
+  `from django.dispatch import receiver as on` and `import django.dispatch as d`
+  are now resolved when matching `@receiver` decorators ([#261](https://github.com/FROWNINGdev/orm-lens/issues/261)).
+
 ## [py-1.18.0] - 2026-11-11
 
 > Fewer false drift alarms on django-oscar-style and moved models.
