@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **parser: collect fields declared inside class-body conditional blocks**
+  ([#253](https://github.com/FROWNINGdev/orm-lens/issues/253)).
+  Fields declared across every branch of a complete class-body `if`/`elif`/`else`
+  or `try`/`except` chain (or in `finally`, including nested chains) are now
+  extracted keeping the first definition (with an unconditional declaration
+  replacing an earlier conditional one), while partial/unmatched conditional
+  fields, method locals, and nested non-`Meta` classes remain ignored.
+  Python parser only (`src/parser.ts` not updated).
+
 - **migration-risk: treat annotated or partly computed `dependencies` as unknown**
   ([#280](https://github.com/FROWNINGdev/orm-lens/issues/280)).
   Annotated assignments (`dependencies: list = get_dependencies()`) and
