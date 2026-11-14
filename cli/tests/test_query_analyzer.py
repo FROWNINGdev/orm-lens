@@ -193,6 +193,33 @@ class SuggestIndexesTest(unittest.TestCase):
             self.assertEqual(result["target"], "orders.NoSuchModel")
             self.assertEqual(result["error"], "model not found in workspace")
 
+    def test_aliased_fields_keep_their_index_eligibility(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "shop" / "models.py",
+                "from django.db import models\n"
+                "from django.db.models import CharField as CF, ManyToManyField as M2M\n"
+                "class Product(models.Model):\n"
+                "    code = CF(max_length=30)\n"
+                "    tags = M2M('Tag')\n",
+            )
+            _write(
+                root / "shop" / "views.py",
+                "from .models import Product\n"
+                "Product.objects.filter(code='one')\n"
+                "Product.objects.filter(code='two')\n"
+                "Product.objects.filter(tags=1)\n"
+                "Product.objects.filter(tags=2)\n",
+            )
+
+            result = suggest_indexes("shop", "Product", str(root))
+            self.assertEqual([p["fields"] for p in result["proposed_indexes"]], [["code"]])
+            self.assertEqual(
+                {u["field"]: u["sites"] for u in result["filter_usages"]},
+                {"code": 2, "tags": 2},
+            )
+
     def test_get_call_is_captured(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

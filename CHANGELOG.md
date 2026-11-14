@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **suggest-indexes: only propose indexes on local columns**
   ([#252](https://github.com/FROWNINGdev/orm-lens/issues/252)).
   Many-to-many and reverse relation lookups still appear in usage counts,
-  but no longer produce invalid `Meta.indexes` suggestions.
+  but no longer produce invalid `Meta.indexes` suggestions. Django field imports
+  that use an alias keep their original field type in both parsers.
 
 - **Recognize directly imported Django field types** ([#250](https://github.com/FROWNINGdev/orm-lens/issues/250)).
   The CLI and VS Code parsers now recognize `GeneratedField` and PostgreSQL
