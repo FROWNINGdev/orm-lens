@@ -140,7 +140,7 @@ All of it is here, MIT-licensed, with no tier gate, no seat count, no account, a
   </a>
 </div>
 
-### 🤝 Built by 30 people
+### 🤝 Contributors
 
 Most fixes now come from people who found orm-lens through a `good first issue`. Each one is a real wrong answer from a real Django codebase, with a repro, the file to start in and the test to make pass.
 
