@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **migration-risk: text output no longer prints `app.None` for graph-level
+  findings** ([#268](https://github.com/FROWNINGdev/orm-lens/issues/268)).
+  `conflicting_migration_leaves` and `alembic_multiple_heads` carry no model,
+  so the header now joins only the parts that are set —
+  `(migration graph) shop` instead of `(migration graph) shop.None`. The
+  `sarif` and `github` formats were already correct.
+
 - **suggest-indexes: only propose indexes on local columns**
   ([#252](https://github.com/FROWNINGdev/orm-lens/issues/252)).
   Many-to-many and reverse relation lookups still appear in usage counts,

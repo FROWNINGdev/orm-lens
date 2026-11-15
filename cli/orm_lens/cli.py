@@ -43,7 +43,11 @@ from .er_formats import ER_BUILDERS
 from .er_formats import _columns as _er_columns
 from .formatters import format_hover, format_index, format_model
 from .impact import group_by_layer, scan_impact
-from .migrations_parser import analyze_migration_risks, describe_migration_dependency
+from .migrations_parser import (
+    MigrationRisk,
+    analyze_migration_risks,
+    describe_migration_dependency,
+)
 from .models import (
     ParsedModel,
     WorkspaceIndex,
@@ -280,6 +284,17 @@ def _cmd_nplusone(args: argparse.Namespace) -> int:
 _SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 
 
+def _format_risk_target(finding: MigrationRisk) -> str:
+    """Render the ``app[.model[.field]]`` target shown by the text format.
+
+    Graph-level findings (``conflicting_migration_leaves``,
+    ``alembic_multiple_heads``) carry no model, so joining every part
+    unconditionally would print ``shop.None``.
+    """
+    parts = (finding.app, finding.model, finding.field)
+    return ".".join(part for part in parts if part)
+
+
 def _cmd_migration_risk(args: argparse.Namespace) -> int:
     """Analyze Django migrations and Alembic revisions for operations dangerous in production."""
     findings = analyze_migration_risks(args.path) + analyze_alembic_risks(args.path)
@@ -312,8 +327,7 @@ def _cmd_migration_risk(args: argparse.Namespace) -> int:
         for f in findings:
             print(
                 f"{f.file_path}:{f.line_number}  [{f.severity}/{f.confidence}]  "
-                f"{f.operation} {f.app}.{f.model}"
-                + (f".{f.field}" if f.field else "")
+                f"{f.operation} {_format_risk_target(f)}"
             )
             print(f"  rule:      {f.rule}")
             print(f"  risk:      {f.description}")
