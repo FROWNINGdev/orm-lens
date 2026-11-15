@@ -296,6 +296,37 @@ class CrossModuleAndInheritanceChainTest(unittest.TestCase):
             ],
         )
 
+    def test_resolves_reexported_module_bindings_in_package_init(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root / "core" / "__init__.py",
+                "from . import fields as exported_fields\nfrom . import bad_cycle as bad_cycle\n",
+            )
+            _write(
+                root / "core" / "fields.py",
+                "from django.db import models\n\n\n"
+                "class MoneyField(models.DecimalField):\n"
+                "    pass\n",
+            )
+            _write(
+                root / "shop" / "models.py",
+                "import core\n"
+                "from django.db import models\n"
+                "from core import bad_cycle as cyc\n"
+                "from core import exported_fields as f\n\n\n"
+                "class Invoice(models.Model):\n"
+                "    price = f.MoneyField(max_digits=10, decimal_places=2)\n"
+                "    fee = core.exported_fields.MoneyField(max_digits=6, decimal_places=2)\n"
+                "    ignored = cyc.MissingField()\n",
+            )
+            index = scan_workspace(str(root))
+            models = {m.name: m for app in index.apps for m in app.models}
+            self.assertEqual(
+                [(f.name, f.type) for f in models["Invoice"].fields],
+                [("price", "DecimalField"), ("fee", "DecimalField")],
+            )
+
 
 class NonFieldGuardsTest(unittest.TestCase):
     """Non-field calls, managers, form/serializer fields, and cycles stay ignored."""
@@ -348,6 +379,73 @@ class NonFieldGuardsTest(unittest.TestCase):
                 [(f.name, f.type) for f in models["Order"].fields],
                 [("code", "CharField")],
             )
+
+    def test_postgres_and_third_party_model_fields_accepted_but_forms_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root / "core" / "fields.py",
+                "from django.contrib.postgres.fields import ArrayField\n"
+                "from django.contrib.postgres.forms import SimpleArrayField\n"
+                "from django.contrib.postgres.search import SearchVectorField\n"
+                "from mptt.fields import TreeForeignKey\n"
+                "from mptt.forms import TreeNodeChoiceField\n"
+                "from taggit.forms import TagField\n"
+                "from taggit.managers import TaggableManager\n\n\n"
+                "class TagListField(ArrayField):\n"
+                "    pass\n\n\n"
+                "class FullTextField(SearchVectorField):\n"
+                "    pass\n\n\n"
+                "class CategoryTreeFK(TreeForeignKey):\n"
+                "    pass\n\n\n"
+                "class CustomTaggableManager(TaggableManager):\n"
+                "    pass\n\n\n"
+                "class FormArrayField(SimpleArrayField):\n"
+                "    pass\n\n\n"
+                "class FormTreeChoiceField(TreeNodeChoiceField):\n"
+                "    pass\n\n\n"
+                "class FormTagField(TagField):\n"
+                "    pass\n",
+            )
+            _write(
+                root / "blog" / "models.py",
+                "from django.db import models\n"
+                "from core.fields import (\n"
+                "    CategoryTreeFK,\n"
+                "    CustomTaggableManager,\n"
+                "    FormArrayField,\n"
+                "    FormTagField,\n"
+                "    FormTreeChoiceField,\n"
+                "    FullTextField,\n"
+                "    TagListField,\n"
+                ")\n\n\n"
+                "class Article(models.Model):\n"
+                "    labels = TagListField(models.CharField(max_length=20))\n"
+                "    search = FullTextField()\n"
+                '    parent = CategoryTreeFK("self", on_delete=models.CASCADE, null=True)\n'
+                "    tags = CustomTaggableManager()\n"
+                "    form_arr = FormArrayField(models.CharField(max_length=20))\n"
+                "    form_tree = FormTreeChoiceField(queryset=None)\n"
+                "    form_tag = FormTagField()\n",
+            )
+            index = scan_workspace(str(root))
+            models = {m.name: m for app in index.apps for m in app.models}
+            article = models["Article"]
+            self.assertEqual(
+                [(f.name, f.type) for f in article.fields],
+                [
+                    ("labels", "ArrayField"),
+                    ("search", "SearchVectorField"),
+                    ("parent", "TreeForeignKey"),
+                    ("tags", "TaggableManager"),
+                ],
+            )
+            parent = next(f for f in article.fields if f.name == "parent")
+            self.assertEqual(parent.relation_kind, "ForeignKey")
+            tags = next(f for f in article.fields if f.name == "tags")
+            self.assertEqual(tags.relation_kind, "ManyToManyField")
 
 
 if __name__ == "__main__":

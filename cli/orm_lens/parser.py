@@ -1174,14 +1174,24 @@ def _parse_module_classes(content: str) -> _ModuleClasses:
     )
 
 
+_POSTGRES_FIELD_MODULES = (
+    "django.contrib.postgres.fields",
+    "django.contrib.postgres.search",
+)
+_MPTT_FIELD_MODULES = ("mptt.fields", "mptt.models")
+_TAGGIT_FIELD_MODULES = ("taggit.managers", "taggit.models")
+
+
+def _in_module_roots(module: str, roots: tuple[str, ...]) -> bool:
+    return any(module == r or module.startswith(f"{r}.") for r in roots)
+
+
 def _is_django_field_module(module: str) -> bool:
     return (
-        module == "django.db.models"
-        or module.startswith("django.db.models.")
-        or module.startswith("django.contrib.postgres.")
-        or module.startswith("django.contrib.gis.db.models")
-        or module.startswith("mptt.")
-        or module.startswith("taggit.")
+        _in_module_roots(module, ("django.db.models", "django.contrib.gis.db.models"))
+        or _in_module_roots(module, _POSTGRES_FIELD_MODULES)
+        or _in_module_roots(module, _MPTT_FIELD_MODULES)
+        or _in_module_roots(module, _TAGGIT_FIELD_MODULES)
     )
 
 
@@ -1339,17 +1349,52 @@ def _resolve_field_candidates(
             if head is None:
                 if qual == ["models"]:
                     result = _django_field_from_symbol("django.db.models", name)
-                    if not stack:
-                        memo[(key, ref)] = result
-                    return result
-                module = ".".join(qual)
-            elif head[1] is None:
-                module = ".".join([head[0], *qual[1:]]) if qual[1:] else head[0]
+                elif root is not None and info.star_modules:
+                    for star_mod in info.star_modules:
+                        if star_mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES):
+                            continue
+                        for cand_path in _module_files(star_mod, str(key), root):
+                            found = resolve_ref(cand_path, ref, hops + 1, next_stack)
+                            if found is not None:
+                                result = found
+                                break
+                        if result is not None:
+                            break
+                if not stack:
+                    memo[(key, ref)] = result
+                return result
+
+            if head[1] is None:
+                base_mod = head[0]
+                module = ".".join([base_mod, *qual[1:]]) if qual[1:] else base_mod
+                reexport_lookups = (
+                    [(base_mod, ".".join([*qual[1:], name]))] if qual[1:] else []
+                )
             else:
-                module = _join_module(head[0], head[1])
+                base_mod = _join_module(head[0], head[1])
+                module = base_mod
                 for part in qual[1:]:
                     module = _join_module(module, part)
+                reexport_lookups = [
+                    (head[0], ".".join([head[1], *qual[1:], name])),
+                ]
+                if qual[1:]:
+                    reexport_lookups.append(
+                        (base_mod, ".".join([*qual[1:], name]))
+                    )
+
             result = _django_field_from_symbol(module, name)
+            if result is None and root is not None:
+                for target_mod, sub_ref in reexport_lookups:
+                    if target_mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES):
+                        continue
+                    for cand_path in _module_files(target_mod, str(key), root):
+                        found = resolve_ref(cand_path, sub_ref, hops + 1, next_stack)
+                        if found is not None:
+                            result = found
+                            break
+                    if result is not None:
+                        break
             if (
                 result is None
                 and root is not None
