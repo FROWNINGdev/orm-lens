@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SearchVectorField`. Schema drift checks can now match those declarations
   to their migrations.
 
+- **Workspace Mixin classes are no longer guessed to be models**
+  ([#249](https://github.com/FROWNINGdev/orm-lens/issues/249)). Any base
+  whose name ended in `Mixin` used to count as a Django model base, so plain
+  helpers (QuerySets, URL mixins) were reported as models and `drift` failed
+  with "declared, but no migration creates it". A base is now resolved
+  through its module's imports — including aliases — before the suffix guess
+  is used, and a class dropped as a known non-model (`models.QuerySet`,
+  `models.Manager`, ...) also stops its subclasses from becoming models. A
+  real abstract mixin is still found through its `models.Model` base, and a
+  third-party `*Mixin` the scanner cannot see keeps the guess.
+- **Abstract bases with the same class name are matched by `(file, name)`,
+  not bare name** ([#249](https://github.com/FROWNINGdev/orm-lens/issues/249)).
+  When two apps defined a base with the same class name, a model could
+  inherit from whichever same-named base was seen first because the other
+  base was treated as already known. Bases are now identified by the file
+  their import resolves to, so a model inherits the fields of its own app's
+  base instead of another app's.
 - **nplusone: no `select_related` for a scalar when the loop's model is
   unknown** ([#251](https://github.com/FROWNINGdev/orm-lens/issues/251)).
   `for e in self.events.all(): e.date_from.astimezone(tz)` was guessed to be a

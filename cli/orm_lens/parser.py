@@ -20,12 +20,13 @@ Key semantics preserved from the TS parser:
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import re
 import sys
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -525,7 +526,9 @@ def parse_models_file(file_path: str, content: str) -> list[ParsedModel]:
     collects definitions across every file first and resolves the union
     once, so a base defined outside this file is still found.
     """
-    return _resolve_and_filter(_collect_defs(file_path, content))
+    non_models: set[str] = set()
+    defs = _collect_defs(file_path, content, non_models)
+    return _resolve_and_filter(defs, known_non_models={file_path: non_models})
 
 
 # Column-0 statements that can't be part of a column-0 class body: the block
@@ -598,12 +601,23 @@ def _field_import_aliases(lines: Sequence[str], in_string: frozenset[int]) -> di
     return aliases
 
 
-def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
+def _collect_defs(
+    file_path: str,
+    content: str,
+    non_model_names: set[str] | None = None,
+) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
 
     No transitive resolution or abstract filtering — callers combine the
     result with definitions from other files before calling
     ``_resolve_and_filter``.
+
+    Classes dropped because every base is a known non-model tail
+    (``models.QuerySet``, ``models.Manager``, ...) are recorded in
+    ``non_model_names`` when the caller passes a set. Their subclasses stay
+    in the result, so the resolver needs those names to see that the chain
+    ends in a non-model instead of falling back to the ``*Mixin`` guess
+    (issue #249).
     """
     # Strip leading BOM (U+FEFF) — Windows editors (Notepad, VS Code with
     # certain settings) save UTF-8 files with a byte-order mark. Without this
@@ -667,6 +681,8 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
         if base_classes and all(
             NON_MODEL_TAIL.match(b.split(".")[-1]) for b in base_classes
         ):
+            if non_model_names is not None:
+                non_model_names.add(model_name)
             i += 1
             continue
 
@@ -887,10 +903,25 @@ def _abstract_bases_fields(
     out: list[ParsedField] = []
     taken: set[str] = set()
     for base in model.base_classes:
-        target = _resolved_base_name(model, base, resolver)
+        known, parent = (
+            resolver.lookup(Path(model.file_path), base)
+            if resolver is not None
+            else (False, None)
+        )
+        target = parent.name if parent is not None else base.split(".")[-1]
         if target in stack:
             continue
-        parent = _pick_base(by_name.get(target, []), model)
+        if parent is None:
+            # A name the resolver says is a workspace class but not a model
+            # (a dropped QuerySet/Manager base) cannot be an abstract model;
+            # fall back to the name-only pick only for third-party bases.
+            if known:
+                continue
+            parent = _pick_base(by_name.get(target, []), model)
+        elif parent is model or (
+            parent.name == model.name and parent.file_path == model.file_path
+        ):
+            parent = _pick_base(by_name.get(target, []), model)
         if parent is None or parent is model or not _is_abstract(parent):
             continue
         contributed = [
@@ -938,6 +969,7 @@ def _attach_inherited_fields(
 def _resolve_and_filter(
     all_defs: list[ParsedModel],
     resolver: _WorkspaceResolver | None = None,
+    known_non_models: dict[str, set[str]] | None = None,
 ) -> list[ParsedModel]:
     """Pass 2: transitive model resolution + abstract drop over ``all_defs``.
 
@@ -951,26 +983,35 @@ def _resolve_and_filter(
     file, or one reached through that file's imports (including aliases).
     A same-named class elsewhere in the workspace must not hide a third-party
     mixin the scanner cannot see (a false negative).
+
+    ``known_non_models`` carries the names ``_collect_defs`` dropped per
+    file, so the single-file path treats a QuerySet/Manager base as
+    workspace-defined too.
     """
     _attach_inherited_fields(all_defs, resolver)
     if resolver is None:
         names_by_file: dict[str, set[str]] = {}
         for m in all_defs:
             names_by_file.setdefault(m.file_path, set()).add(m.name)
+        non_models_by_file = known_non_models or {}
 
         def is_workspace_defined(model: ParsedModel, base: str) -> bool:
-            return base.split(".")[-1] in names_by_file.get(model.file_path, ())
+            tail = base.split(".")[-1]
+            return (
+                tail in names_by_file.get(model.file_path, ())
+                or tail in non_models_by_file.get(model.file_path, ())
+            )
     else:
 
         def is_workspace_defined(model: ParsedModel, base: str) -> bool:
-            return resolver.resolve(Path(model.file_path), base) is not None
+            return resolver.lookup(Path(model.file_path), base)[0]
 
     is_model_name = {
         m.name
         for m in all_defs
         if _looks_like_model(
             m.base_classes,
-            lambda b, _m=m: is_workspace_defined(_m, b),
+            functools.partial(is_workspace_defined, m),
         )
     }
     resolved_bases = {
@@ -1057,7 +1098,8 @@ def _module_files(module: str, from_file: str, root: Path) -> list[Path]:
     """
     dots = len(module) - len(module.lstrip("."))
     parts = [p for p in module[dots:].split(".") if p]
-    here = Path(from_file).resolve().parent
+    # Callers pass an already-resolved file, so no second ``resolve()`` here.
+    here = Path(from_file).parent
     # ``from .x`` is this package, each extra dot one directory up.
     lineage = [here, *here.parents]
     bases = lineage[dots - 1 : dots] if dots else lineage
@@ -1072,29 +1114,58 @@ def _module_files(module: str, from_file: str, root: Path) -> list[Path]:
     return out
 
 
+@dataclass(frozen=True)
+class _ModuleEntry:
+    """Parsed module contents used to resolve base names."""
+
+    defs: dict[str, ParsedModel]
+    imports: dict[str, tuple[str, str | None]]
+    non_models: frozenset[str]
+
+
 class _WorkspaceResolver:
     """Per-file import bindings and class defs for resolving base names.
 
-    Each module is cached as ``(defs_by_name, imports)``, where ``imports`` is
-    the local binding map from :func:`_parse_imports`. That map is what makes
-    an aliased base resolve: ``from .mixins import StateQuerySetMixin as
+    Each module is cached as a :class:`_ModuleEntry`: its defs by name, the
+    local binding map from :func:`_parse_imports`, and the class names
+    ``_collect_defs`` dropped as known non-models. That map is what makes an
+    aliased base resolve: ``from .mixins import StateQuerySetMixin as
     StateMixin`` binds ``StateMixin`` to the original name and module, so the
     definition is found instead of guessed at by suffix. Modules outside
     ``root`` or matching an exclude are never read.
+
+    ``lookup`` results are cached on the instance, keyed by ``(path, base)``.
+    A new resolver is created for every scan, so a later scan in the same
+    process never sees stale results.
     """
 
     def __init__(self, root: Path, excludes: Sequence[str]) -> None:
         self.root = root
         self.excludes = excludes
-        self.loaded: dict[
-            Path,
-            tuple[dict[str, ParsedModel], dict[str, tuple[str, str | None]]] | None,
+        self.loaded: dict[Path, _ModuleEntry | None] = {}
+        self._resolved_paths: dict[Path, Path] = {}
+        self._lookups: dict[
+            tuple[Path, str], tuple[bool, ParsedModel | None]
         ] = {}
 
-    def load(
-        self, path: Path
-    ) -> tuple[dict[str, ParsedModel], dict[str, tuple[str, str | None]]] | None:
-        path = path.resolve()
+    def _resolved(self, path: Path) -> Path:
+        """``path.resolve()`` once per path for the lifetime of the scan."""
+        resolved = self._resolved_paths.get(path)
+        if resolved is None:
+            resolved = path.resolve()
+            self._resolved_paths[path] = resolved
+        return resolved
+
+    def load(self, path: Path) -> _ModuleEntry | None:
+        if path in self.loaded:
+            return self.loaded[path]
+        if not path.is_file():
+            # Most candidates from _module_files do not exist. Resolving a
+            # missing path still walks the filesystem on Windows, so cache the
+            # miss before paying for it.
+            self.loaded[path] = None
+            return None
+        path = self._resolved(path)
         if path in self.loaded:
             return self.loaded[path]
         self.loaded[path] = None
@@ -1107,35 +1178,40 @@ class _WorkspaceResolver:
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
             defs: dict[str, ParsedModel] = {}
+            non_models: set[str] = set()
             # A SQLAlchemy base (``class CoreModel(Model)`` on
             # Flask-AppBuilder) must not turn its importers into Django models.
             if not is_sqlalchemy_only_source(content):
-                for d in _collect_defs(str(path), content):
+                for d in _collect_defs(str(path), content, non_models):
                     defs.setdefault(d.name, d)
         except Exception:
             return None
-        self.loaded[path] = (defs, _parse_imports(content))
-        return self.loaded[path]
+        entry = _ModuleEntry(defs, _parse_imports(content), frozenset(non_models))
+        self.loaded[path] = entry
+        return entry
 
-    def resolve(self, path: Path, base: str, hops: int = 0) -> ParsedModel | None:
-        """Follow ``base`` from ``path`` through imports to a class def.
+    def _lookup(
+        self, path: Path, base: str, hops: int = 0
+    ) -> tuple[bool, ParsedModel | None]:
+        """Resolve ``base`` from ``path`` to ``(workspace_defined, def)``.
 
-        ``base`` may be a bare name, an aliased import, or a dotted
-        ``module.Name`` / ``pkg.module.Name`` reference. Re-exports are
-        followed up to :data:`_MAX_IMPORT_HOPS`; anything that escapes the
-        workspace resolves to ``None``.
+        ``workspace_defined`` is true when the name resolves to *any* class in
+        the workspace, including one ``_collect_defs`` dropped as a known
+        non-model (a QuerySet/Manager mixin); ``def`` is then ``None``.
         """
         entry = self.load(path)
         if entry is None or hops > _MAX_IMPORT_HOPS:
-            return None
-        defs, imports = entry
+            return False, None
+        defs, imports, non_models = entry.defs, entry.imports, entry.non_models
         *qual, name = base.split(".")
         if not qual:
             if name in defs:
-                return defs[name]
+                return True, defs[name]
+            if name in non_models:
+                return True, None
             target = imports.get(name)
             if target is None or target[1] is None:
-                return None
+                return False, None
             module, name = target[0], target[1]
         else:
             head = imports.get(qual[0])
@@ -1148,10 +1224,37 @@ class _WorkspaceResolver:
             for part in qual[1:]:
                 module = _join_module(module, part)
         for candidate in _module_files(module, str(path), self.root):
-            found = self.resolve(candidate, name, hops + 1)
-            if found is not None:
+            found = self._lookup(candidate, name, hops + 1)
+            if found[0]:
                 return found
-        return None
+        return False, None
+
+    def lookup(
+        self, path: Path, base: str
+    ) -> tuple[bool, ParsedModel | None]:
+        """Cached :meth:`_lookup` for the ``(path, base)`` pair."""
+        path = self._resolved(path)
+        key = (path, base)
+        cached = self._lookups.get(key)
+        if cached is not None:
+            return cached
+        result = self._lookup(path, base)
+        self._lookups[key] = result
+        return result
+
+    def resolve(self, path: Path, base: str, hops: int = 0) -> ParsedModel | None:
+        """Follow ``base`` from ``path`` through imports to a class def.
+
+        ``base`` may be a bare name, an aliased import, or a dotted
+        ``module.Name`` / ``pkg.module.Name`` reference. Re-exports are
+        followed up to :data:`_MAX_IMPORT_HOPS`; anything that escapes the
+        workspace resolves to ``None``. Known non-models resolve to ``None``
+        here too; use :meth:`lookup` to tell them apart from third-party
+        names.
+        """
+        if hops:
+            return self._lookup(path, base, hops)[1]
+        return self.lookup(path, base)[1]
 
 
 def _pull_imported_bases(
@@ -1175,10 +1278,11 @@ def _pull_imported_bases(
 
     # Identity is (file, class), not just the class name: the same name may be
     # defined in several apps, and an import decides which one a base means.
-    known_defs = {
-        (Path(m.file_path).resolve(), m.name) for m in all_defs
-    }
-    queue = [(m.file_path, b) for m in all_defs for b in m.base_classes]
+    def norm(path: str) -> str:
+        return str(resolver._resolved(Path(path)))
+
+    known_defs = {(norm(m.file_path), m.name) for m in all_defs}
+    queue = [(norm(m.file_path), b) for m in all_defs for b in m.base_classes]
     asked: set[tuple[str, str]] = set()
     pulled: list[ParsedModel] = []
     while queue:
@@ -1186,15 +1290,15 @@ def _pull_imported_bases(
         if (file_path, base) in asked:
             continue
         asked.add((file_path, base))
-        found = resolver.resolve(Path(file_path).resolve(), base)
+        found = resolver.resolve(Path(file_path), base)
         if found is None:
             continue
-        key = (Path(found.file_path).resolve(), found.name)
+        key = (norm(found.file_path), found.name)
         if key in known_defs:
             continue
         known_defs.add(key)
         pulled.append(found)
-        queue.extend((found.file_path, b) for b in found.base_classes)
+        queue.extend((norm(found.file_path), b) for b in found.base_classes)
     return pulled
 
 

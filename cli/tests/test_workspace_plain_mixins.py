@@ -186,5 +186,117 @@ class AbstractModelMixinStillRecognisedTest(unittest.TestCase):
         self.assertEqual([f.name for f in models[0].inherited_fields], ["owner"])
 
 
+class QuerySetManagerMixinChainTest(unittest.TestCase):
+    def test_same_file_queryset_and_manager_subclasses_are_not_models(self) -> None:
+        # The Mixin base itself is dropped by _collect_defs because all of its
+        # bases are non-model tails. The subclass stays, and used to fall back
+        # to the *Mixin suffix guess and become a model (#249).
+        src = (
+            "from django.db import models\n"
+            "\n"
+            "class SoftDeleteQuerySetMixin(models.QuerySet):\n"
+            "    def alive(self):\n"
+            "        return self.filter(deleted_at__isnull=True)\n"
+            "\n"
+            "class ArticleQuerySet(SoftDeleteQuerySetMixin):\n"
+            "    pass\n"
+            "\n"
+            "class SoftDeleteManagerMixin(models.Manager):\n"
+            "    pass\n"
+            "\n"
+            "class ArticleManager(SoftDeleteManagerMixin):\n"
+            "    pass\n"
+            "\n"
+            "class Article(models.Model):\n"
+            "    title = models.CharField(max_length=100)\n"
+        )
+        models = parse_models_file("blog/models.py", src)
+        self.assertEqual([m.name for m in models], ["Article"])
+
+    def test_imported_queryset_mixin_subclass_is_not_a_model(self) -> None:
+        # The mixin lives outside the scanned models file; the resolver has to
+        # follow the import and remember that the dropped class was a known
+        # non-model rather than guess from the name.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "articles" / "querysets.py",
+                "from django.db import models\n"
+                "\n"
+                "class SoftDeleteQuerySetMixin(models.QuerySet):\n"
+                "    pass\n",
+            )
+            _write(
+                root / "articles" / "models.py",
+                "from django.db import models\n"
+                "\n"
+                "from .querysets import SoftDeleteQuerySetMixin\n"
+                "\n"
+                "class ArticleQuerySet(SoftDeleteQuerySetMixin):\n"
+                "    pass\n"
+                "\n"
+                "class Article(models.Model):\n"
+                "    title = models.CharField(max_length=100)\n",
+            )
+            index = scan_workspace(str(root))
+            names = {m.name for a in index.apps for m in a.models}
+        self.assertEqual(names, {"Article"})
+
+
+class SameNamedAbstractBaseResolvedByFileTest(unittest.TestCase):
+    def test_model_inherits_its_own_apps_base_not_the_same_named_one(self) -> None:
+        # app_a's base lives in a module outside the scanned model files;
+        # app_b has a scanned base with the same name. Matching bases by bare
+        # name used to treat app_b's base as already known and never pull
+        # app_a's, so app_a.Item inherited app_b's field. Identity is now
+        # (file, name), resolved through app_a's import.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "app_a" / "base.py",
+                "from django.db import models\n"
+                "\n"
+                "class AbstractItem(models.Model):\n"
+                "    local_field = models.CharField(max_length=50)\n"
+                "\n"
+                "    class Meta:\n"
+                "        abstract = True\n",
+            )
+            _write(
+                root / "app_a" / "models.py",
+                "from django.db import models\n"
+                "\n"
+                "from .base import AbstractItem\n"
+                "\n"
+                "class Item(AbstractItem):\n"
+                "    pass\n",
+            )
+            _write(
+                root / "app_b" / "models.py",
+                "from django.db import models\n"
+                "\n"
+                "class AbstractItem(models.Model):\n"
+                "    other_field = models.CharField(max_length=50)\n"
+                "\n"
+                "    class Meta:\n"
+                "        abstract = True\n"
+                "\n"
+                "class Item(AbstractItem):\n"
+                "    pass\n",
+            )
+            index = scan_workspace(str(root))
+            fields = {
+                app.name: [
+                    f.name
+                    for f in next(
+                        m for m in app.models if m.name == "Item"
+                    ).all_fields()
+                ]
+                for app in index.apps
+            }
+        self.assertEqual(fields["app_a"], ["local_field"])
+        self.assertEqual(fields["app_b"], ["other_field"])
+
+
 if __name__ == "__main__":
     unittest.main()
