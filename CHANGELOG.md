@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Count the fields Django's auth bases give a custom user model**
+  ([#267](https://github.com/FROWNINGdev/orm-lens/issues/267)).
+  A model built on `AbstractBaseUser`, `PermissionsMixin` or `AbstractUser`
+  now inherits their fields (`password`, `last_login`, `is_superuser`,
+  `groups`, `user_permissions`, and the profile fields of `AbstractUser`) in
+  both parsers, so `drift` no longer reports them as migrated but no longer
+  declared. A workspace class with the same name still wins, a field the
+  model sets to `None` (`username = None`) stays removed, and an abstract
+  parent's own field now overrides the same field from its ancestors.
+
 - **migration-risk: no leaf conflict when `dependencies` is computed**
   ([#247](https://github.com/FROWNINGdev/orm-lens/issues/247)).
   A migration with `dependencies = get_dependencies()` was read as having no
