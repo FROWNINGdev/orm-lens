@@ -236,7 +236,10 @@ function buildBodyRegexes(indent: number) {
     ALIASED_FIELD_RE: new RegExp(
       `^${w}([a-zA-Z_][a-zA-Z0-9_]*)${ann}\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\(`
     ),
-    REMOVED_RE: new RegExp(`^${w}([a-zA-Z_][a-zA-Z0-9_]*)${ann}\\s*=\\s*None\\s*(?:#.*)?$`),
+    // `a = None` or chained `a = b = None`; group 1 holds the targets.
+    REMOVED_RE: new RegExp(
+      `^${w}([a-zA-Z_][a-zA-Z0-9_]*(?:\\s*=\\s*[a-zA-Z_][a-zA-Z0-9_]*)*)${ann}\\s*=\\s*None\\s*(?:#.*)?$`
+    ),
     META_START_RE: new RegExp(`^${w}class\\s+Meta\\s*(?:\\([^)]*\\))?\\s*:`),
     META_ITEM_RE: new RegExp(
       `^${w2}([a-zA-Z_][a-zA-Z0-9_]*)${ann}\\s*=\\s*(.+?)\\s*(#.*)?$`
@@ -445,6 +448,11 @@ export function collectDefs(filePath: string, content: string): ParsedModel[] {
       if (/^class\s+/.test(innerLine) && !/^\s+class/.test(innerLine)) {
         break;
       }
+      // A column-0 function, block or decorator ends the class too, as in the
+      // Python parser (#226), so its body is not read as class attributes.
+      if (COLUMN0_STATEMENT_RE.test(innerLine)) {
+        break;
+      }
       if (innerLine.trim().length === 0) {
         j++;
         continue;
@@ -473,7 +481,7 @@ export function collectDefs(filePath: string, content: string): ParsedModel[] {
       const removed = innerLine.match(REMOVED_RE);
       if (removed) {
         // `name = None` drops a field inherited from an abstract base.
-        (model.removedFields ??= []).push(removed[1]);
+        (model.removedFields ??= []).push(...removed[1].split(/\s*=\s*/));
         j++;
         continue;
       }
@@ -548,6 +556,10 @@ export function collectDefs(filePath: string, content: string): ParsedModel[] {
 function isAbstract(model: ParsedModel): boolean {
   return ['True', '1', 'true'].includes((model.meta.abstract ?? '').trim());
 }
+
+/** Mirrors `_COLUMN0_STATEMENT_RE` in cli/orm_lens/parser.py. */
+const COLUMN0_STATEMENT_RE =
+  /^(?:(?:if|elif|while|for|try|with|async\s+(?:def|for|with)|def)\b|(?:else|except|finally)\b|@)/;
 
 const djangoField = (name: string, type: string, args: string, inheritedFrom: string): ParsedField => ({
   name,

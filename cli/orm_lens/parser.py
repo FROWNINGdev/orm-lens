@@ -191,8 +191,10 @@ def _build_body_regexes(indent: int):
         "ALIASED_FIELD_RE": re.compile(
             rf"^{w}([a-zA-Z_][a-zA-Z0-9_]*){ann}\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("
         ),
+        # ``a = None`` or chained ``a = b = None``; group 1 holds the targets.
         "REMOVED_RE": re.compile(
-            rf"^{w}([a-zA-Z_][a-zA-Z0-9_]*){ann}\s*=\s*None\s*(?:#.*)?$"
+            rf"^{w}([a-zA-Z_][a-zA-Z0-9_]*(?:\s*=\s*[a-zA-Z_][a-zA-Z0-9_]*)*){ann}"
+            r"\s*=\s*None\s*(?:#.*)?$"
         ),
         "META_START_RE": re.compile(rf"^{w}class\s+Meta\s*(?:\([^)]*\))?\s*:"),
         "META_ITEM_RE": re.compile(
@@ -755,7 +757,7 @@ def _collect_defs(
             removed = rx["REMOVED_RE"].match(inner)
             if removed:
                 # ``name = None`` drops a field inherited from an abstract base.
-                model.removed_fields.append(removed[1])
+                model.removed_fields.extend(re.split(r"\s*=\s*", removed[1]))
                 j += 1
                 continue
 

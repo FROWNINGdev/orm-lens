@@ -123,3 +123,28 @@ class User(BaseUser):
     [['unique=True', 'BaseUser']]
   );
 });
+
+test('a chained None removes every target', () => {
+  const u = user(`from django.contrib.auth.models import AbstractUser
+
+
+class User(AbstractUser):
+    first_name = last_name = None
+`);
+  const names = u.inheritedFields.map((f) => f.name);
+  assert.ok(!names.includes('first_name'));
+  assert.ok(!names.includes('last_name'));
+});
+
+test('a function after the model is not read as its body', () => {
+  const u = user(`from django.contrib.auth.models import AbstractUser
+
+
+class User(AbstractUser):
+    pass
+
+def helper():
+    groups = None
+`);
+  assert.ok(u.inheritedFields.some((f) => f.name === 'groups'));
+});

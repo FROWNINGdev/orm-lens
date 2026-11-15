@@ -135,6 +135,17 @@ class DjangoAuthBasesTest(unittest.TestCase):
         self.assertNotIn("first_name", names)
         self.assertIn("is_staff", names)
 
+    def test_a_chained_none_removes_every_target(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    first_name = last_name = None\n"
+        )
+        names = [f.name for f in user.inherited_fields]
+        self.assertNotIn("first_name", names)
+        self.assertNotIn("last_name", names)
+
     def test_an_abstract_parent_override_beats_the_django_field(self) -> None:
         models_ = parse_models_file(
             "accounts/models.py",
