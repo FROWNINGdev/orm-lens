@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **migration-risk: no leaf conflict when `dependencies` is computed**
+  ([#247](https://github.com/FROWNINGdev/orm-lens/issues/247)).
+  A migration with `dependencies = get_dependencies()` was read as having no
+  dependencies, so its parent looked like a second leaf and a linear history
+  got a critical `conflicting_migration_leaves`. Such a migration is now
+  marked `dependencies_unknown` and the leaf check stays silent for its app.
+
 - **Parser: ignore Django field examples inside model docstrings.** Both the
   CLI and VS Code now keep those examples out of the model's field list.
 - **suggest-indexes: skip composites over a unique column**
