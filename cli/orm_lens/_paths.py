@@ -18,10 +18,30 @@ BROAD_SKIP_DIRS: frozenset = frozenset(
 )
 
 
+def _is_app_dir(path: str) -> bool:
+    """A directory Django would treat as an app: it has ``migrations/`` or ``apps.py``."""
+    return os.path.isdir(os.path.join(path, "migrations")) or os.path.isfile(
+        os.path.join(path, "apps.py")
+    )
+
+
 def _app_dir_for(fs_path: str) -> tuple[str, str]:
+    """The app directory and label for a models file.
+
+    Start at the file's directory (or the parent of a ``models/`` package).
+    Django labels a model by the app whose package contains the module, so an
+    app that splits its models into sub-packages (``io_storages/s3/models.py``)
+    still belongs to ``io_storages``: when the start directory is not an app
+    itself, walk up while the parent is a package and stop at the first
+    directory with ``migrations/`` or ``apps.py``. Nothing found: the start
+    directory, as before.
+    """
     parent = os.path.dirname(fs_path)
-    parent_name = os.path.basename(parent)
-    if parent_name == "models":
-        grand = os.path.dirname(parent)
-        return grand, os.path.basename(grand)
-    return parent, parent_name
+    start = os.path.dirname(parent) if os.path.basename(parent) == "models" else parent
+    current = start
+    while not _is_app_dir(current):
+        up = os.path.dirname(current)
+        if up == current or not os.path.isfile(os.path.join(up, "__init__.py")):
+            return start, os.path.basename(start)
+        current = up
+    return current, os.path.basename(current)

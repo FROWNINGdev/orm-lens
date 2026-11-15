@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Parser: models in a sub-package keep their app's label**
+  ([#266](https://github.com/FROWNINGdev/orm-lens/issues/266)).
+  `io_storages/s3/models.py` was labelled `s3`; the CLI now walks up through
+  packages to the directory with `migrations/` or `apps.py`, so it is
+  `io_storages.S3ImportStorage`, as Django calls it, and `drift` no longer
+  reports it as undeclared. The VS Code parser still uses the old rule.
+
 - **Parser: ignore Django field examples inside model docstrings.** Both the
   CLI and VS Code now keep those examples out of the model's field list.
 - **suggest-indexes: skip composites over a unique column**

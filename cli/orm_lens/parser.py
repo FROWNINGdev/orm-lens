@@ -603,11 +603,7 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     all_defs: list[ParsedModel] = []
     in_string = _lines_inside_strings(lines)
     field_aliases = _field_import_aliases(lines, in_string)
-    parent = os.path.basename(os.path.dirname(file_path))
-    if parent == "models":
-        app_name = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    else:
-        app_name = parent or "app"
+    app_name = _app_dir_for(file_path)[1] or "app"
 
     i = 0
     while i < len(lines):
