@@ -25,6 +25,12 @@ def _is_app_dir(path: str) -> bool:
     )
 
 
+def _package_dir(fs_path: str) -> str:
+    """The directory that owns a models file: its parent, or the grandparent for ``models/``."""
+    parent = os.path.dirname(fs_path)
+    return os.path.dirname(parent) if os.path.basename(parent) == "models" else parent
+
+
 def _app_dir_for(fs_path: str) -> tuple[str, str]:
     """The app directory and label for a models file.
 
@@ -36,8 +42,7 @@ def _app_dir_for(fs_path: str) -> tuple[str, str]:
     directory with ``migrations/`` or ``apps.py``. Nothing found: the start
     directory, as before.
     """
-    parent = os.path.dirname(fs_path)
-    start = os.path.dirname(parent) if os.path.basename(parent) == "models" else parent
+    start = _package_dir(fs_path)
     current = start
     while not _is_app_dir(current):
         up = os.path.dirname(current)

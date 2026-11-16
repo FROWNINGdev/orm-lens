@@ -120,6 +120,41 @@ class SubPackageAppLabelTests(unittest.TestCase):
 
         self.assertEqual(_labels(self.root), {"storage.Blob"})
 
+    def test_same_named_bases_in_sibling_sub_packages(self) -> None:
+        # `app/a/` and `app/b/` each define a `Base`, and both now belong to the
+        # enclosing app `app`. Each subclass must inherit from the `Base` of
+        # its own sub-package.
+        app = self.root / "app"
+        _write(app / "__init__.py")
+        _write(app / "migrations" / "__init__.py")
+        for pkg in ("a", "b"):
+            _write(app / pkg / "__init__.py")
+            _write(
+                app / pkg / "abstract_models.py",
+                "from django.db import models\n\n\n"
+                "class Base(models.Model):\n"
+                f"    from_{pkg} = models.CharField(max_length=10)\n\n"
+                "    class Meta:\n"
+                "        abstract = True\n",
+            )
+        _write(
+            app / "a" / "models.py",
+            "from app.a.abstract_models import Base\n\n\nclass Other(Base):\n    pass\n",
+        )
+        _write(app / "b" / "models" / "__init__.py", "from .thing import Thing  # noqa: F401\n")
+        _write(
+            app / "b" / "models" / "thing.py",
+            "from app.b.abstract_models import Base\n\n\nclass Thing(Base):\n    pass\n",
+        )
+
+        index = scan_workspace(str(self.root))
+        fields = {
+            m.name: sorted(f.name for f in m.all_fields())
+            for a in index.apps
+            for m in a.models
+        }
+        self.assertEqual(fields, {"Other": ["from_a"], "Thing": ["from_b"]})
+
     def test_walk_stops_at_a_directory_that_is_not_a_package(self) -> None:
         # `site/` has migrations/ but is not a package, so `blog/` (a package
         # with no markers of its own) must not be pulled into it.
