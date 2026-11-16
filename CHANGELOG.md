@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   got a critical `conflicting_migration_leaves`. Such a migration is now
   marked `dependencies_unknown` and the leaf check stays silent for its app.
 
+- **VS Code rules DOL011 / DOL014 / DOL015 read past nested calls.**
+  `CharField(max_length=100, verbose_name=_("Name"), null=True)` was never
+  matched: the rules scanned the call with `([^()]*)`, which stops at the
+  paren inside `_("Name")`. i18n-wrapped fields escaped the `null=True`,
+  missing-`max_length` and `TextField(max_length=)` checks. All three now use
+  the same `readCallArgs` helper DOL013 already used.
+
 - **Parser: models in a sub-package keep their app's label**
   ([#266](https://github.com/FROWNINGdev/orm-lens/issues/266)).
   `io_storages/s3/models.py` was labelled `s3`; the CLI now walks up through
