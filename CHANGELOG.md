@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
+  `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads
+  `items__product` too, but only the `items` lookup was recorded, so a loop over
+  `order.items.all()` reading `item.product` was reported as N+1 although the view
+  runs two queries. The inline queryset's `select_related` / `prefetch_related` paths
+  now count under the lookup. A queryset held in a variable, or a `Prefetch` with
+  `to_attr`, is still not followed.
+
 - **migration-risk: no leaf conflict when `dependencies` is computed**
   ([#247](https://github.com/FROWNINGdev/orm-lens/issues/247)).
   A migration with `dependencies = get_dependencies()` was read as having no
