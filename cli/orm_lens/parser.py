@@ -504,6 +504,12 @@ def _looks_like_model(
         ):
             return True
         if re.match(r"^Abstract[A-Z]", tail):
+            # The same rule as the ``Mixin`` branch below: a base defined in
+            # the analysed workspace is resolved through its own chain, so a
+            # plain ``class AbstractURLMixin:`` helper must not turn its
+            # subclasses into models (#249 follow-up).
+            if is_workspace_defined is not None and is_workspace_defined(b):
+                continue
             return True
         if re.search(r"Mixin$", tail):
             if is_workspace_defined is not None and is_workspace_defined(b):
@@ -882,6 +888,56 @@ def _resolved_base_name(
     return base.split(".")[-1]
 
 
+_MODEL_ROOT_TAIL = re.compile(
+    r"^(Model|AbstractModel|AbstractBaseModel|TimeStampedModel"
+    r"|PolymorphicModel|MPTTModel)$"
+)
+
+
+def _has_model_ancestry(
+    model: ParsedModel,
+    by_name: dict[str, list[ParsedModel]],
+    resolver: _WorkspaceResolver | None,
+    seen: frozenset[tuple[str, str]] = frozenset(),
+) -> bool:
+    """Does ``model``'s own base chain reach a Django model root?
+
+    ``Meta.abstract = True`` alone does not make a class an abstract *model*:
+    Django copies fields only from bases that are models, so a plain helper
+    that happens to set ``abstract`` must not contribute columns (#249
+    follow-up). A base the scanner cannot see keeps the name guess, which is
+    what lets a third-party model mixin still contribute.
+    """
+    key = (model.file_path, model.name)
+    if key in seen:
+        return False
+    seen = seen | {key}
+    for base in model.base_classes:
+        tail = base.split(".")[-1]
+        if re.search(r"models\.Model$", base) or _MODEL_ROOT_TAIL.match(tail):
+            return True
+        known, parent = (
+            resolver.lookup(Path(model.file_path), base)
+            if resolver is not None
+            else (False, None)
+        )
+        if parent is None and not known:
+            parent = _pick_base(by_name.get(tail, []), model)
+        if parent is not None:
+            if parent is not model and _has_model_ancestry(
+                parent, by_name, resolver, seen
+            ):
+                return True
+            continue
+        if known:
+            # A workspace class the scanner dropped as a non-model
+            # (a QuerySet/Manager mixin) cannot be an abstract model.
+            continue
+        if re.search(r"Mixin$", tail) or re.match(r"^Abstract[A-Z]", tail):
+            return True
+    return False
+
+
 def _abstract_bases_fields(
     model: ParsedModel,
     by_name: dict[str, list[ParsedModel]],
@@ -923,6 +979,16 @@ def _abstract_bases_fields(
         ):
             parent = _pick_base(by_name.get(target, []), model)
         if parent is None or parent is model or not _is_abstract(parent):
+            continue
+        # ``Meta.abstract`` is not enough: Django copies fields only from an
+        # abstract *model*, so a plain class marked abstract must not
+        # contribute its attributes as columns (#249 follow-up).
+        if not _has_model_ancestry(
+            parent,
+            by_name,
+            resolver,
+            frozenset({(model.file_path, model.name)}),
+        ):
             continue
         contributed = [
             *_abstract_bases_fields(

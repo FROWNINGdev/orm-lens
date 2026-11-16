@@ -298,5 +298,92 @@ class SameNamedAbstractBaseResolvedByFileTest(unittest.TestCase):
         self.assertEqual(fields["app_b"], ["other_field"])
 
 
+ABSTRACT_URL_MIXINS = """
+class AbstractURLMixin:
+    def get_absolute_url(self):
+        return "/"
+"""
+
+ABSTRACT_URL_MODELS = """
+from django.db import models
+
+from .mixins import AbstractURLMixin
+
+
+class Project(AbstractURLMixin):
+    title = models.CharField(max_length=100)
+"""
+
+PLAIN_ABSTRACT_FLAG_SOURCE = """
+from django.db import models
+
+
+class FieldMixin:
+    label = models.CharField(max_length=30)
+
+    class Meta:
+        abstract = True
+
+
+class Project(FieldMixin, models.Model):
+    title = models.CharField(max_length=100)
+"""
+
+PLAIN_FIELD_WITH_REAL_ABSTRACT_SOURCE = """
+from django.db import models
+
+
+class FieldMixin:
+    label = models.CharField(max_length=30)
+
+    class Meta:
+        abstract = True
+
+
+class OwnedMixin(models.Model):
+    owner = models.CharField(max_length=50)
+
+    class Meta:
+        abstract = True
+
+
+class Project(FieldMixin, OwnedMixin):
+    title = models.CharField(max_length=100)
+"""
+
+
+class AbstractNamedPlainMixinTest(unittest.TestCase):
+    def test_abstract_named_workspace_mixin_is_not_a_model(self) -> None:
+        # The ``Abstract*`` naming shortcut returned before the workspace
+        # check, so a plain ``class AbstractURLMixin:`` helper made every
+        # subclass a model even when nothing in its chain reached Django
+        # (#249 follow-up).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "pages" / "mixins.py", ABSTRACT_URL_MIXINS)
+            _write(root / "pages" / "models.py", ABSTRACT_URL_MODELS)
+            index = scan_workspace(str(root))
+            names = {m.name for a in index.apps for m in a.models}
+        self.assertEqual(names, set())
+
+
+class PlainAbstractFlagDoesNotContributeFieldsTest(unittest.TestCase):
+    def test_plain_class_with_meta_abstract_contributes_no_fields(self) -> None:
+        # ``Meta.abstract = True`` alone does not make a class a model, so
+        # Django would never copy these attributes as columns (#249
+        # follow-up).
+        models = parse_models_file("pages/models.py", PLAIN_ABSTRACT_FLAG_SOURCE)
+        self.assertEqual([m.name for m in models], ["Project"])
+        self.assertEqual(models[0].inherited_fields, [])
+        self.assertEqual([f.name for f in models[0].all_fields()], ["title"])
+
+    def test_genuine_abstract_model_base_still_contributes_fields(self) -> None:
+        models = parse_models_file(
+            "pages/models.py", PLAIN_FIELD_WITH_REAL_ABSTRACT_SOURCE
+        )
+        self.assertEqual([m.name for m in models], ["Project"])
+        self.assertEqual([f.name for f in models[0].inherited_fields], ["owner"])
+
+
 if __name__ == "__main__":
     unittest.main()
