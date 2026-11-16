@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **parser: recognise aliased Django model roots and key inheritance cycles by (file, class)**
+  ([#281](https://github.com/FROWNINGdev/orm-lens/issues/281)).
+  An imported alias of `django.db.models.Model` (e.g. `from django.db.models import Model as DjangoModel`)
+  is now resolved as a model root before workspace mixin suppression, preventing subclasses of
+  workspace mixins from dropping out of the model list. In addition, abstract base cycle detection
+  is now keyed on `(file, class)` rather than bare class name, so an abstract mixin extending a
+  same-named mixin in another module no longer drops inherited fields.
+
 - **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
   `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads
   `items__product` too, but only the `items` lookup was recorded, so a loop over
