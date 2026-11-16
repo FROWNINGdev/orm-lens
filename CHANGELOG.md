@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now keyed on `(file, class)` rather than bare class name, so an abstract mixin extending a
   same-named mixin in another module no longer drops inherited fields.
 
+- **cascade / find_relations: resolve inbound relations by app and inherited fields.**
+  Django copies an abstract base's fields onto every concrete child's table,
+  but both tools read only the class body's `fields`. An FK on an `Owned`
+  mixin was invisible: `cascade` said the delete was isolated and
+  `find_relations` showed no outbound edge. The inbound match also compared
+  only the model name, so `ForeignKey("billing.Owner")` appeared under
+  `shop.Owner` when both apps define `Owner`. Both now read `all_fields()`
+  and compare the app label of a qualified reference.
+
 - **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
   `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads
   `items__product` too, but only the `items` lookup was recorded, so a loop over

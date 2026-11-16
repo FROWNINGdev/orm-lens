@@ -136,6 +136,16 @@ class AuthUserResolutionTest(unittest.TestCase):
         user = _StubModel("User", ["AbstractUser"])
         self.assertTrue(_rel_matches_target("accounts.User", "User", user))
         self.assertTrue(_rel_matches_target("User", "User", user))
+        self.assertTrue(
+            _rel_matches_target("accounts.User", "User", user, "accounts")
+        )
+        self.assertTrue(_rel_matches_target("User", "User", user, "accounts"))
+
+    def test_rel_qualified_reference_requires_the_same_app(self):
+        user = _StubModel("User", ["AbstractUser"])
+        self.assertFalse(
+            _rel_matches_target("billing.User", "User", user, "accounts")
+        )
 
     def test_rel_match_settings_auth_user_model(self):
         user = _StubModel("User", ["AbstractUser"])

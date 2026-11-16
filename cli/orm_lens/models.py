@@ -300,6 +300,44 @@ def resolve_related_tail(
     return tail
 
 
+def resolve_related_target(
+    related_model: str | None, user_model_name: str | None = None
+) -> tuple[str | None, str | None]:
+    """Return ``(app_label, model_name)`` for a relation reference.
+
+    ``app_label`` is ``None`` when the reference names no app: a bare
+    ``Model``, ``self``, or ``settings.AUTH_USER_MODEL``. The last one is
+    resolved to the workspace's user model, which can live in any app.
+    """
+    if not related_model:
+        return None, None
+    tail = related_model.rsplit(".", 1)[-1]
+    if tail == "AUTH_USER_MODEL":
+        return None, user_model_name
+    if "." not in related_model:
+        return None, tail
+    return related_model.rsplit(".", 1)[0], tail
+
+
+def relation_points_at(
+    related_model: str | None,
+    model_name: str,
+    app_name: str | None = None,
+    user_model_name: str | None = None,
+) -> bool:
+    """True when ``related_model`` names ``app_name.model_name``.
+
+    A bare ``Model`` cannot name an app, so it matches by model name alone.
+    A qualified ``billing.Owner`` matches ``shop.Owner`` only when the app
+    labels agree: Django resolves the string against the app registry, and
+    two apps can define the same model name.
+    """
+    target_app, target_name = resolve_related_target(related_model, user_model_name)
+    if target_name != model_name:
+        return False
+    return target_app is None or app_name is None or target_app == app_name
+
+
 def cascade_preview(index: WorkspaceIndex, ref: str) -> dict[str, Any]:
     """Preview what ``<Model>.delete()`` does to the rest of the schema.
 
@@ -338,14 +376,19 @@ def cascade_preview(index: WorkspaceIndex, ref: str) -> dict[str, Any]:
     for app in index.apps:
         for other in app.models:
             is_self = other is m
-            for f in other.fields:
+            # Abstract-base fields are copied onto every concrete child's
+            # table, so they are inbound relations too. ``fields`` alone
+            # misses them: an Owned mixin's FK looked isolated.
+            for f in other.all_fields():
                 if not f.is_relation or not f.related_model:
                     continue
                 related_tail = resolve_related_tail(f.related_model, user_name)
                 if related_tail == "self":
                     if not is_self:
                         continue
-                elif related_tail != m.name:
+                elif not relation_points_at(
+                    f.related_model, m.name, target_app, user_name
+                ):
                     continue
                 on_delete = (f.on_delete or "").upper()
                 entry: dict[str, Any] = {
