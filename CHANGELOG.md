@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docs: `--path` / `--exclude` and the MCP tool list**
+  ([#282](https://github.com/FROWNINGdev/orm-lens/issues/282)).
+  The READMEs said every command takes `--path` and `--exclude`; `stats-sql`
+  and `mcp` take neither, and the READMEs now say so. The Russian, Spanish and
+  Chinese READMEs listed ten MCP tools; they now list all fourteen, as the
+  English one does.
+
 - **parser: recognise aliased Django model roots and key inheritance cycles by (file, class)**
   ([#281](https://github.com/FROWNINGdev/orm-lens/issues/281)).
   An imported alias of `django.db.models.Model` (e.g. `from django.db.models import Model as DjangoModel`)
