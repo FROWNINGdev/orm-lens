@@ -1123,9 +1123,14 @@ def _resolve_and_filter(
                 or tail in non_models_by_file.get(model.file_path, ())
             )
     else:
+        known_def_names = {m.name for m in all_defs}
 
         def is_workspace_defined(model: ParsedModel, base: str) -> bool:
-            return resolver.lookup(Path(model.file_path), base)[0]
+            found, target_def = resolver.lookup(Path(model.file_path), base)
+            return bool(
+                found
+                and (target_def is None or target_def.name in known_def_names)
+            )
 
     is_model_name = {
         m.name
@@ -1390,7 +1395,7 @@ class _WorkspaceResolver:
         defs, imports = entry.defs, entry.imports
         *qual, name = base.split(".")
         if not qual:
-            if name in defs:
+            if name in defs or name in entry.non_models:
                 return False
             target = imports.get(name)
             if target is None:

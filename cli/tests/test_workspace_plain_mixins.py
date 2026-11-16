@@ -511,6 +511,37 @@ class AliasedModelRootTest(unittest.TestCase):
         models = parse_models_file("projects/models.py", src)
         self.assertEqual([m.name for m in models], ["Project"])
 
+    def test_single_file_parsing_with_absolute_path_and_sibling_mixin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "app"
+            root.mkdir()
+            _write(
+                root / "mixins.py",
+                "from django.db import models\n\n"
+                "class AuditMixin(models.Model):\n"
+                "    class Meta:\n"
+                "        abstract = True\n",
+            )
+            models_file = root / "models.py"
+            content = "from .mixins import AuditMixin\n\nclass Project(AuditMixin):\n    pass\n"
+            _write(models_file, content)
+            models = parse_models_file(str(models_file), content)
+            self.assertEqual([m.name for m in models], ["Project"])
+
+    def test_local_non_model_shadowing_imported_model_alias(self) -> None:
+        src = (
+            "from django.db import models\n"
+            "from django.db.models import Model as DjangoModel\n"
+            "\n"
+            "class DjangoModel(models.QuerySet):\n"
+            "    pass\n"
+            "\n"
+            "class Project(DjangoModel):\n"
+            "    pass\n"
+        )
+        models = parse_models_file("app/models.py", src)
+        self.assertEqual(models, [])
+
 
 class CycleDetectionByFileAndClassTest(unittest.TestCase):
     def test_ancestor_with_same_class_name_in_different_file_is_not_skipped(self) -> None:
