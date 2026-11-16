@@ -441,5 +441,149 @@ class AncestryResolutionTest(unittest.TestCase):
         self.assertEqual([f.name for f in models[0].inherited_fields], ["owner"])
 
 
+ALIASED_MODEL_ROOT_MIXINS = """
+from django.db import models
+from django.db.models import Model as DjangoModel
+
+
+class AuditMixin(DjangoModel):
+    created = models.DateTimeField()
+
+    class Meta:
+        abstract = True
+"""
+
+ALIASED_MODEL_ROOT_MODELS = """
+from django.db import models
+
+from .mixins import AuditMixin
+
+
+class Project(AuditMixin):
+    name = models.CharField(max_length=50)
+"""
+
+
+class AliasedModelRootTest(unittest.TestCase):
+    def test_aliased_django_model_root_in_workspace_mixin(self) -> None:
+        # Issue #281: _looks_like_model did not recognise DjangoModel, and
+        # since #258 workspace mixins don't get the *Mixin suffix guess, so
+        # Project dropped out of the model list.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "projects" / "mixins.py", ALIASED_MODEL_ROOT_MIXINS)
+            _write(root / "projects" / "models.py", ALIASED_MODEL_ROOT_MODELS)
+            index = scan_workspace(str(root))
+            names = {m.name for a in index.apps for m in a.models}
+            self.assertEqual(names, {"Project"})
+            project = next(m for a in index.apps for m in a.models if m.name == "Project")
+            field_names = [f.name for f in project.all_fields()]
+            self.assertIn("name", field_names)
+            self.assertIn("created", field_names)
+
+    def test_aliased_django_model_root_in_single_file(self) -> None:
+        src = (
+            "from django.db import models\n"
+            "from django.db.models import Model as DjangoModel\n"
+            "\n"
+            "class AuditMixin(DjangoModel):\n"
+            "    created = models.DateTimeField()\n"
+            "    class Meta:\n"
+            "        abstract = True\n"
+            "\n"
+            "class Project(AuditMixin):\n"
+            "    name = models.CharField(max_length=50)\n"
+        )
+        models = parse_models_file("projects/models.py", src)
+        self.assertEqual([m.name for m in models], ["Project"])
+        field_names = [f.name for f in models[0].all_fields()]
+        self.assertIn("name", field_names)
+        self.assertIn("created", field_names)
+
+    def test_aliased_django_model_root_direct_model(self) -> None:
+        src = (
+            "from django.db import models\n"
+            "from django.db.models import Model as DjangoModel\n"
+            "\n"
+            "class Project(DjangoModel):\n"
+            "    name = models.CharField(max_length=50)\n"
+        )
+        models = parse_models_file("projects/models.py", src)
+        self.assertEqual([m.name for m in models], ["Project"])
+
+    def test_single_file_parsing_with_absolute_path_and_sibling_mixin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "app"
+            root.mkdir()
+            _write(
+                root / "mixins.py",
+                "from django.db import models\n\n"
+                "class AuditMixin(models.Model):\n"
+                "    class Meta:\n"
+                "        abstract = True\n",
+            )
+            models_file = root / "models.py"
+            content = "from .mixins import AuditMixin\n\nclass Project(AuditMixin):\n    pass\n"
+            _write(models_file, content)
+            models = parse_models_file(str(models_file), content)
+            self.assertEqual([m.name for m in models], ["Project"])
+
+    def test_local_non_model_shadowing_imported_model_alias(self) -> None:
+        src = (
+            "from django.db import models\n"
+            "from django.db.models import Model as DjangoModel\n"
+            "\n"
+            "class DjangoModel(models.QuerySet):\n"
+            "    pass\n"
+            "\n"
+            "class Project(DjangoModel):\n"
+            "    pass\n"
+        )
+        models = parse_models_file("app/models.py", src)
+        self.assertEqual(models, [])
+
+
+class CycleDetectionByFileAndClassTest(unittest.TestCase):
+    def test_ancestor_with_same_class_name_in_different_file_is_not_skipped(self) -> None:
+        # Issue #281: app/mixins.py: AuditMixin extends shared/mixins.py: AuditMixin.
+        # Keying cycle detection by bare name caused the second ancestor to be
+        # skipped as a cycle, dropping its inherited fields from all_fields().
+        shared_mixins = (
+            "from django.db import models\n"
+            "\n"
+            "class AuditMixin(models.Model):\n"
+            "    created = models.DateTimeField()\n"
+            "    class Meta:\n"
+            "        abstract = True\n"
+        )
+        app_mixins = (
+            "from django.db import models\n"
+            "from shared.mixins import AuditMixin as SharedAuditMixin\n"
+            "\n"
+            "class AuditMixin(SharedAuditMixin):\n"
+            "    updated = models.DateTimeField()\n"
+            "    class Meta:\n"
+            "        abstract = True\n"
+        )
+        app_models = (
+            "from django.db import models\n"
+            "from .mixins import AuditMixin\n"
+            "\n"
+            "class Project(AuditMixin):\n"
+            "    name = models.CharField(max_length=50)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "shared" / "mixins.py", shared_mixins)
+            _write(root / "app" / "mixins.py", app_mixins)
+            _write(root / "app" / "models.py", app_models)
+            index = scan_workspace(str(root))
+            project = next(m for a in index.apps for m in a.models if m.name == "Project")
+            field_names = [f.name for f in project.all_fields()]
+            self.assertIn("name", field_names)
+            self.assertIn("updated", field_names)
+            self.assertIn("created", field_names)
+
+
 if __name__ == "__main__":
     unittest.main()

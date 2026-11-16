@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 from fnmatch import fnmatch
 from pathlib import Path
 
-from ._paths import BROAD_SKIP_DIRS, _app_dir_for
+from ._paths import BROAD_SKIP_DIRS, _app_dir_for, _package_dir
 from .models import (
     ParsedApp,
     ParsedField,
@@ -485,6 +485,7 @@ def _encloses_only_blocks(lines: Sequence[str], idx: int, indent: int) -> bool:
 def _looks_like_model(
     base_classes: list[str],
     is_workspace_defined: Callable[[str], bool] | None = None,
+    is_model_root: Callable[[str], bool] | None = None,
 ) -> bool:
     """Does a base list identify a Django model from its names alone?
 
@@ -507,6 +508,8 @@ def _looks_like_model(
             r"|PolymorphicModel|MPTTModel)$",
             tail,
         ):
+            return True
+        if is_model_root is not None and is_model_root(b):
             return True
         if re.match(r"^Abstract[A-Z]", tail):
             # The same rule as the ``Mixin`` branch below: a base defined in
@@ -539,7 +542,18 @@ def parse_models_file(file_path: str, content: str) -> list[ParsedModel]:
     """
     non_models: set[str] = set()
     defs = _collect_defs(file_path, content, non_models)
-    return _resolve_and_filter(defs, known_non_models={file_path: non_models})
+    resolver = _WorkspaceResolver(Path(file_path).parent, ())
+    entry = _ModuleEntry(
+        {d.name: d for d in defs},
+        _parse_imports(content),
+        frozenset(non_models),
+    )
+    p = Path(file_path)
+    resolver.loaded[p] = entry
+    resolver.loaded[resolver._resolved(p)] = entry
+    return _resolve_and_filter(
+        defs, resolver=resolver, known_non_models={file_path: non_models}
+    )
 
 
 # Column-0 statements that can't be part of a column-0 class body: the block
@@ -644,11 +658,7 @@ def _collect_defs(
     all_defs: list[ParsedModel] = []
     in_string = _lines_inside_strings(lines)
     field_aliases = _field_import_aliases(lines, in_string)
-    parent = os.path.basename(os.path.dirname(file_path))
-    if parent == "models":
-        app_name = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    else:
-        app_name = parent or "app"
+    app_name = _app_dir_for(file_path)[1] or "app"
 
     i = 0
     while i < len(lines):
@@ -866,15 +876,23 @@ def _pick_base(
     """Choose which same-named class ``model``'s base refers to.
 
     A base in the subclass's own directory wins (``order/models.py`` →
-    ``order/abstract_models.py``). Failing that, a base in the same app
-    (``order/models/line.py`` → ``order/abstract_models.py``) wins. Otherwise
-    the first definition, as before.
+    ``order/abstract_models.py``). Failing that, a base in the same package
+    (``order/models/line.py`` → ``order/abstract_models.py``), then one in the
+    same app (``app/b/models.py`` → ``app/abstract_models.py`` when ``app`` is
+    the enclosing app). Otherwise the first definition, as before.
+
+    The package comes before the app: two sub-packages of one app
+    (``app/a/``, ``app/b/``) can each define a ``Base``.
     """
     if not candidates:
         return None
     here = Path(model.file_path).parent
     for c in candidates:
         if Path(c.file_path).parent == here:
+            return c
+    package_dir = _package_dir(model.file_path)
+    for c in candidates:
+        if _package_dir(c.file_path) == package_dir:
             return c
     app_dir = _app_dir_for(model.file_path)[0]
     for c in candidates:
@@ -894,6 +912,8 @@ def _resolved_base_name(
     single-file ``parse_models_file`` path, where there is no import graph.
     """
     if resolver is not None:
+        if resolver.is_model_root(Path(model.file_path), base):
+            return "Model"
         found = resolver.resolve(Path(model.file_path), base)
         if found is not None:
             return found.name
@@ -904,6 +924,7 @@ _MODEL_ROOT_TAIL = re.compile(
     r"^(Model|AbstractModel|AbstractBaseModel|TimeStampedModel"
     r"|PolymorphicModel|MPTTModel)$"
 )
+_DJANGO_MODEL_MODULE = re.compile(r"^django\.db\.models(\.base)?$")
 
 
 def _has_model_ancestry(
@@ -926,7 +947,12 @@ def _has_model_ancestry(
     (``AbstractAudit(Group)``), and Django copies an abstract parent's local
     fields. Those stay inherited rather than being dropped on a name guess.
     """
-    key = (model.file_path, model.name)
+    key = (
+        str(resolver._resolved(Path(model.file_path)))
+        if resolver is not None
+        else model.file_path,
+        model.name,
+    )
     if key in seen:
         return False
     seen = seen | {key}
@@ -936,6 +962,8 @@ def _has_model_ancestry(
         if tail in non_models:
             continue
         if re.search(r"models\.Model$", base) or _MODEL_ROOT_TAIL.match(tail):
+            return True
+        if resolver is not None and resolver.is_model_root(Path(model.file_path), base):
             return True
         known, parent = (
             resolver.lookup(Path(model.file_path), base)
@@ -1013,7 +1041,7 @@ DJANGO_ABSTRACT_BASES: dict[str, tuple[ParsedField, ...]] = {
 def _abstract_bases_fields(
     model: ParsedModel,
     by_name: dict[str, list[ParsedModel]],
-    stack: tuple[str, ...] = (),
+    stack: tuple[tuple[str, str], ...] = (),
     resolver: _WorkspaceResolver | None = None,
     known_non_models: dict[str, set[str]] | None = None,
 ) -> list[ParsedField]:
@@ -1032,6 +1060,13 @@ def _abstract_bases_fields(
     """
     out: list[ParsedField] = []
     taken: set[str] = set()
+    model_key = (
+        str(resolver._resolved(Path(model.file_path)))
+        if resolver is not None
+        else model.file_path,
+        model.name,
+    )
+    current_stack = stack if stack else (model_key,)
     for base in model.base_classes:
         known, parent = (
             resolver.lookup(Path(model.file_path), base)
@@ -1039,8 +1074,6 @@ def _abstract_bases_fields(
             else (False, None)
         )
         target = parent.name if parent is not None else base.split(".")[-1]
-        if target in stack:
-            continue
         if parent is None:
             # A name the resolver says is a workspace class but not a model
             # (a dropped QuerySet/Manager base) cannot be an abstract model;
@@ -1054,28 +1087,38 @@ def _abstract_bases_fields(
             parent = _pick_base(by_name.get(target, []), model)
         if parent is None:
             contributed = [replace(f) for f in DJANGO_ABSTRACT_BASES.get(target, ())]
-        # ``Meta.abstract`` is not enough: Django copies fields only from an
-        # abstract *model*, so a plain class marked abstract must not
-        # contribute its attributes as columns (#249 follow-up).
-        elif (
-            parent is model
-            or not _is_abstract(parent)
-            or not _has_model_ancestry(
+        elif parent is model or not _is_abstract(parent):
+            continue
+        else:
+            parent_key = (
+                str(resolver._resolved(Path(parent.file_path)))
+                if resolver is not None
+                else parent.file_path,
+                parent.name,
+            )
+            if parent_key in current_stack:
+                continue
+            # ``Meta.abstract`` is not enough: Django copies fields only from an
+            # abstract *model*, so a plain class marked abstract must not
+            # contribute its attributes as columns (#249 follow-up).
+            if not _has_model_ancestry(
                 parent,
                 by_name,
                 resolver,
-                frozenset({(model.file_path, model.name)}),
+                frozenset({model_key}),
                 known_non_models,
-            )
-        ):
-            continue
-        else:
+            ):
+                continue
             hidden = {f.name for f in parent.fields} | set(parent.removed_fields)
             contributed = [
                 *(
                     f
                     for f in _abstract_bases_fields(
-                        parent, by_name, (*stack, target), resolver, known_non_models
+                        parent,
+                        by_name,
+                        (*current_stack, parent_key),
+                        resolver,
+                        known_non_models,
                     )
                     if f.name not in hidden
                 ),
@@ -1156,9 +1199,14 @@ def _resolve_and_filter(
                 or tail in non_models_by_file.get(model.file_path, ())
             )
     else:
+        known_def_names = {m.name for m in all_defs}
 
         def is_workspace_defined(model: ParsedModel, base: str) -> bool:
-            return resolver.lookup(Path(model.file_path), base)[0]
+            found, target_def = resolver.lookup(Path(model.file_path), base)
+            return bool(
+                found
+                and (target_def is None or target_def.name in known_def_names)
+            )
 
     is_model_name = {
         m.name
@@ -1166,6 +1214,9 @@ def _resolve_and_filter(
         if _looks_like_model(
             m.base_classes,
             functools.partial(is_workspace_defined, m),
+            is_model_root=functools.partial(resolver.is_model_root, Path(m.file_path))
+            if resolver is not None
+            else None,
         )
     }
     resolved_bases = {
@@ -1293,7 +1344,7 @@ class _WorkspaceResolver:
     process never sees stale results.
     """
 
-    def __init__(self, root: Path, excludes: Sequence[str]) -> None:
+    def __init__(self, root: Path, excludes: Sequence[str] = ()) -> None:
         self.root = root
         self.excludes = excludes
         self.loaded: dict[Path, _ModuleEntry | None] = {}
@@ -1301,6 +1352,7 @@ class _WorkspaceResolver:
         self._lookups: dict[
             tuple[Path, str], tuple[bool, ParsedModel | None]
         ] = {}
+        self._model_roots: dict[tuple[Path, str], bool] = {}
 
     def _resolved(self, path: Path) -> Path:
         """``path.resolve()`` once per path for the lifetime of the scan."""
@@ -1409,6 +1461,59 @@ class _WorkspaceResolver:
         if hops:
             return self._lookup(path, base, hops)[1]
         return self.lookup(path, base)[1]
+
+    def _is_model_root(self, path: Path, base: str, hops: int = 0) -> bool:
+        if hops > _MAX_IMPORT_HOPS:
+            return False
+        entry = self.load(path)
+        if entry is None:
+            return False
+        defs, imports = entry.defs, entry.imports
+        *qual, name = base.split(".")
+        if not qual:
+            if name in defs or name in entry.non_models:
+                return False
+            target = imports.get(name)
+            if target is None:
+                return False
+            module, target_name = target[0], target[1]
+            if target_name is None:
+                return False
+        else:
+            head = imports.get(qual[0])
+            if head is None:
+                module = qual[0]
+            elif head[1] is None:
+                module = head[0]
+            else:
+                module = _join_module(head[0], head[1])
+            for part in qual[1:]:
+                module = _join_module(module, part)
+            target_name = name
+
+        if target_name == "Model" and _DJANGO_MODEL_MODULE.match(module):
+            return True
+        if _MODEL_ROOT_TAIL.match(target_name) and (
+            _DJANGO_MODEL_MODULE.match(module)
+            or module in ("model_utils.models", "polymorphic.models", "mptt.models")
+        ):
+            return True
+
+        for candidate in _module_files(module, str(path), self.root):
+            if self._is_model_root(candidate, target_name, hops + 1):
+                return True
+        return False
+
+    def is_model_root(self, path: Path, base: str) -> bool:
+        """Does ``base`` from ``path`` resolve to a Django model root?"""
+        path = self._resolved(path)
+        key = (path, base)
+        cached = self._model_roots.get(key)
+        if cached is not None:
+            return cached
+        result = self._is_model_root(path, base)
+        self._model_roots[key] = result
+        return result
 
 
 def _pull_imported_bases(

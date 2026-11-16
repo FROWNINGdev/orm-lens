@@ -362,11 +362,11 @@ orm-lens migration-deps blog -f mermaid   # per-app migration DAG
 orm-lens cascade blog.Author          # what one delete() takes down
 ```
 
-Каждая команда принимает `--path <dir>` и `--exclude <glob>`. `nplusone` / `migration-risk` / `diff` выходят с кодом `1` при обнаружении проблем — добавьте их в CI, чтобы блокировать PR при регрессиях.
+Все команды, кроме `stats-sql` и `mcp`, принимают `--path <dir>` и `--exclude <glob>`; флаги команды показывает `orm-lens <cmd> --help`. `nplusone` / `migration-risk` / `diff` выходят с кодом `1` при обнаружении проблем — добавьте их в CI, чтобы блокировать PR при регрессиях.
 
 ### MCP-сервер
 
-Добавьте сервер в настройки AI-агента. Через него доступны десять инструментов, которые читают код, но не изменяют его:
+Добавьте сервер в настройки AI-агента. Через него доступны четырнадцать инструментов, которые читают код, но не изменяют его:
 
 | Инструмент | Назначение |
 | --- | --- |
@@ -375,10 +375,14 @@ orm-lens cascade blog.Author          # what one delete() takes down
 | `describe_model` | Поля, связи и параметры `Meta` выбранной модели |
 | `find_relations` | Входящие и исходящие связи одной модели |
 | `cascade_preview` | Последствия одного вызова `delete()`, с группировкой по `on_delete`, и `post_delete`-обработчики, которые пропускает `DB_CASCADE` из Django 6.1 |
-| `er_diagram` | ER-диаграмма — `mermaid` / `dbml` / `d2` / `plantuml` |
+| `er_diagram` | ER-диаграмма — `mermaid` / `dbml` / `d2` / `plantuml` / `dot` |
 | `describe_migration_dependency` | DAG миграций по приложениям: корни, листья, зависимости между приложениями |
 | `suggest_indexes` | Рекомендации по `Meta.indexes` на основе использования QuerySet в коде |
 | `signal_graph` | Граф sender→signal→handler из декораторов `@receiver` |
+| `migration_risk` | Опасные изменения схемы в миграциях Django и ревизиях Alembic (блокировки таблиц, удалённые столбцы) |
+| `blast_radius` | Что затрагивает разрушающая миграция: её риски, код, который всё ещё к ней обращается, последствия каскада |
+| `drift` | `makemigrations --check` без запуска Django — миграции сравниваются с `models.py` |
+| `impact` | Все обращения к полю или модели по имени, сгруппированные по слоям Django |
 | `nplusone_scan` | Поиск N+1 во всей рабочей области без запуска кода |
 
 ```bash
