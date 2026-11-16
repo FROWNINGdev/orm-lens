@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **parser: resolve app label for models in sub-packages**
+  ([#266](https://github.com/FROWNINGdev/orm-lens/issues/266)).
+  When models are split into sub-packages within an app (e.g.
+  `io_storages/s3/models.py`), the app label is resolved from the containing
+  package with `migrations/` or `apps.py` (`io_storages`) rather than the
+  sub-package directory (`s3`). Fixes false-positive drift warnings and
+  `describe` lookups.
+
 - **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
   `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads
   `items__product` too, but only the `items` lookup was recorded, so a loop over

@@ -18,10 +18,31 @@ BROAD_SKIP_DIRS: frozenset = frozenset(
 )
 
 
+def _has_app_markers(d: str) -> bool:
+    if not d:
+        return False
+    return os.path.isdir(os.path.join(d, "migrations")) or os.path.isfile(
+        os.path.join(d, "apps.py")
+    )
+
+
 def _app_dir_for(fs_path: str) -> tuple[str, str]:
     parent = os.path.dirname(fs_path)
     parent_name = os.path.basename(parent)
-    if parent_name == "models":
-        grand = os.path.dirname(parent)
-        return grand, os.path.basename(grand)
-    return parent, parent_name
+    candidate = os.path.dirname(parent) if parent_name == "models" else parent
+
+    if _has_app_markers(candidate):
+        return candidate, os.path.basename(candidate)
+
+    cur = candidate
+    while True:
+        parent_dir = os.path.dirname(cur)
+        if not parent_dir or parent_dir == cur or not os.path.basename(parent_dir):
+            break
+        if not os.path.isfile(os.path.join(parent_dir, "__init__.py")):
+            break
+        cur = parent_dir
+        if _has_app_markers(cur):
+            return cur, os.path.basename(cur)
+
+    return candidate, os.path.basename(candidate)
