@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docs: `--path` / `--exclude` and the MCP tool list**
+  ([#282](https://github.com/FROWNINGdev/orm-lens/issues/282)).
+  The READMEs said every command takes `--path` and `--exclude`; `stats-sql`
+  and `mcp` take neither, and the READMEs now say so. The Russian, Spanish and
+  Chinese READMEs listed ten MCP tools; they now list all fourteen, as the
+  English one does.
+
 - **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
   `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads
   `items__product` too, but only the `items` lookup was recorded, so a loop over
