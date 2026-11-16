@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now count under the lookup. A queryset held in a variable, or a `Prefetch` with
   `to_attr`, is still not followed.
 
+- **impact: report the column of the reference, not of an earlier prefix.**
+  `scan_file_text` searched for the bare needle to find the column, so a line
+  like `authors = ...; book.author.name` pointed at `authors` (column 0)
+  instead of the `author` reference at column 37. The column now comes from
+  the same word-boundary match that accepted the line.
+
 - **Count the fields Django's auth bases give a custom user model**
   ([#267](https://github.com/FROWNINGdev/orm-lens/issues/267)).
   A model built on `AbstractBaseUser`, `PermissionsMixin` or `AbstractUser`
