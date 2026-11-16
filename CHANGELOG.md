@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model sets to `None` (`username = None`) stays removed, and an abstract
   parent's own field now overrides the same field from its ancestors.
 
+- **suggest-indexes: propose one index for a column sorted both ways.**
+  `order_by("created_at")` and `order_by("-created_at")` produced two
+  proposals, `[created_at]` and `[-created_at]`. A B-tree index answers the
+  sort in either direction, so the second was redundant write cost. The
+  order_by pass now dedupes on the bare column, including against a
+  filter-driven proposal on the same column.
+
 - **migration-risk: no leaf conflict when `dependencies` is computed**
   ([#247](https://github.com/FROWNINGdev/orm-lens/issues/247)).
   A migration with `dependencies = get_dependencies()` was read as having no
