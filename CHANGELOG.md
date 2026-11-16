@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **migration-risk: treat annotated or partly computed `dependencies` as unknown**
+  ([#280](https://github.com/FROWNINGdev/orm-lens/issues/280)).
+  Annotated assignments (`dependencies: list = get_dependencies()`) and
+  lists containing computed pairs (`[("shop", get_parent())]`) are now marked
+  `dependencies_unknown`, while recognizing `swappable_dependency(...)` as a
+  known dependency element, preventing false conflicting leaf reports.
+
 - **Docs: `--path` / `--exclude` and the MCP tool list**
   ([#282](https://github.com/FROWNINGdev/orm-lens/issues/282)).
   The READMEs said every command takes `--path` and `--exclude`; `stats-sql`
