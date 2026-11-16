@@ -25,7 +25,7 @@ import re
 import sys
 import time
 from collections.abc import Iterable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -39,6 +39,7 @@ from .models import (
 from .sqlalchemy_parser import (
     declares_sqlalchemy,
     is_sqlalchemy_only_source,
+    parse_source,
     scan_sqlalchemy_models,
 )
 
@@ -188,6 +189,9 @@ def _build_body_regexes(indent: int):
         ),
         "ALIASED_FIELD_RE": re.compile(
             rf"^{w}([a-zA-Z_][a-zA-Z0-9_]*){ann}\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("
+        ),
+        "CANDIDATE_FIELD_RE": re.compile(
+            rf"^{w}([a-zA-Z_][a-zA-Z0-9_]*){ann}\s*=\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\("
         ),
         "META_START_RE": re.compile(rf"^{w}class\s+Meta\s*(?:\([^)]*\))?\s*:"),
         "META_ITEM_RE": re.compile(
@@ -509,7 +513,16 @@ def parse_models_file(file_path: str, content: str) -> list[ParsedModel]:
     collects definitions across every file first and resolves the union
     once, so a base defined outside this file is still found.
     """
-    return _resolve_and_filter(_collect_defs(file_path, content))
+    defs, candidates = _collect_defs_with_candidates(file_path, content)
+    if candidates:
+        _resolve_field_candidates(
+            defs,
+            candidates,
+            root=None,
+            excludes=(),
+            preloaded={Path(file_path): content},
+        )
+    return _resolve_and_filter(defs)
 
 
 # Column-0 statements that can't be part of a column-0 class body: the block
@@ -582,6 +595,56 @@ def _field_import_aliases(lines: Sequence[str], in_string: frozenset[int]) -> di
     return aliases
 
 
+@dataclass
+class _FieldCandidate:
+    model: ParsedModel
+    name: str
+    callee: str
+    args_block: str
+    line_number: int
+
+
+def _make_parsed_field(
+    fname: str, ftype: str, args_block: str, line_number: int
+) -> ParsedField:
+    relation_kind = (
+        "ManyToManyField"
+        if ftype == "TaggableManager"
+        else TREE_FIELD_ALIASES.get(ftype)
+        or (ftype if ftype in RELATION_TYPES else None)
+    )
+    is_rel = relation_kind is not None
+    inner = args_block.removesuffix(")")
+    field = ParsedField(
+        name=fname,
+        type=ftype,
+        args=inner.strip(),
+        is_relation=is_rel,
+        line_number=line_number,
+    )
+    if is_rel:
+        field.relation_kind = relation_kind  # type: ignore[assignment]
+        field.related_model = (
+            "taggit.Tag"
+            if ftype == "TaggableManager"
+            else _extract_related(inner)
+        )
+        field.on_delete = _extract_on_delete(
+            inner, positional=relation_kind != "ManyToManyField"
+        )
+        field.related_name = _extract_related_name(inner)
+        if relation_kind == "ManyToManyField":
+            explicit_through = _extract_through_model(inner)
+            field.through_model = (
+                explicit_through
+                if explicit_through is not None
+                else "taggit.TaggedItem"
+                if ftype == "TaggableManager"
+                else None
+            )
+    return field
+
+
 def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
 
@@ -589,6 +652,12 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     result with definitions from other files before calling
     ``_resolve_and_filter``.
     """
+    return _collect_defs_with_candidates(file_path, content)[0]
+
+
+def _collect_defs_with_candidates(
+    file_path: str, content: str
+) -> tuple[list[ParsedModel], list[_FieldCandidate]]:
     # Strip leading BOM (U+FEFF) — Windows editors (Notepad, VS Code with
     # certain settings) save UTF-8 files with a byte-order mark. Without this
     # the first line becomes "﻿class Foo..." and CLASS_RE fails to match.
@@ -601,6 +670,7 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
     # detected. Line numbers are preserved (per-line expansion only).
     lines = [line.expandtabs(4) for line in content.splitlines()]
     all_defs: list[ParsedModel] = []
+    candidates: list[_FieldCandidate] = []
     in_string = _lines_inside_strings(lines)
     field_aliases = _field_import_aliases(lines, in_string)
     parent = os.path.basename(os.path.dirname(file_path))
@@ -722,42 +792,27 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
                 if ftype in _NOT_A_FIELD:
                     j = end_idx + 1
                     continue
-                relation_kind = (
-                    "ManyToManyField"
-                    if ftype == "TaggableManager"
-                    else TREE_FIELD_ALIASES.get(ftype)
-                    or (ftype if ftype in RELATION_TYPES else None)
-                )
-                is_rel = relation_kind is not None
-                inner = args_block.removesuffix(")")
-                field = ParsedField(
-                    name=fname,
-                    type=ftype,
-                    args=inner.strip(),
-                    is_relation=is_rel,
-                    line_number=j,
-                )
-                if is_rel:
-                    field.relation_kind = relation_kind  # type: ignore[assignment]
-                    field.related_model = (
-                        "taggit.Tag"
-                        if ftype == "TaggableManager"
-                        else _extract_related(inner)
-                    )
-                    field.on_delete = _extract_on_delete(
-                        inner, positional=relation_kind != "ManyToManyField"
-                    )
-                    field.related_name = _extract_related_name(inner)
-                    if relation_kind == "ManyToManyField":
-                        explicit_through = _extract_through_model(inner)
-                        field.through_model = (
-                            explicit_through
-                            if explicit_through is not None
-                            else "taggit.TaggedItem"
-                            if ftype == "TaggableManager"
-                            else None
+                model.fields.append(_make_parsed_field(fname, ftype, args_block, j))
+                j = end_idx + 1
+                continue
+
+            cm = rx["CANDIDATE_FIELD_RE"].match(inner)
+            if cm:
+                fname, callee = cm[1], cm[2]
+                args_block, end_idx = _read_balanced_args(lines, j)
+                if not args_block.endswith(")"):
+                    j += 1
+                    continue
+                if callee.split(".")[-1] not in _NOT_A_FIELD:
+                    candidates.append(
+                        _FieldCandidate(
+                            model=model,
+                            name=fname,
+                            callee=callee,
+                            args_block=args_block,
+                            line_number=j,
                         )
-                model.fields.append(field)
+                    )
                 j = end_idx + 1
                 continue
 
@@ -766,7 +821,7 @@ def _collect_defs(file_path: str, content: str) -> list[ParsedModel]:
         all_defs.append(model)
         i = j
 
-    return all_defs
+    return all_defs, candidates
 
 
 def _read_meta_value(
@@ -892,15 +947,7 @@ def _attach_inherited_fields(all_defs: list[ParsedModel]) -> None:
         ]
 
 
-def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
-    """Pass 2: transitive model resolution + abstract drop over ``all_defs``.
-
-    ``all_defs`` may come from a single file (``parse_models_file``) or the
-    union of every file in a scan (``scan_workspace``) — resolution matches
-    each base's tail name against whatever definitions are present, so a
-    base class defined in another file is found when the union is passed.
-    """
-    _attach_inherited_fields(all_defs)
+def _model_class_names(all_defs: Sequence[ParsedModel]) -> set[str]:
     is_model_name = {m.name for m in all_defs if _looks_like_model(m.base_classes)}
     changed = True
     while changed:
@@ -914,6 +961,19 @@ def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
                     is_model_name.add(m.name)
                     changed = True
                     break
+    return is_model_name
+
+
+def _resolve_and_filter(all_defs: list[ParsedModel]) -> list[ParsedModel]:
+    """Pass 2: transitive model resolution + abstract drop over ``all_defs``.
+
+    ``all_defs`` may come from a single file (``parse_models_file``) or the
+    union of every file in a scan (``scan_workspace``) — resolution matches
+    each base's tail name against whatever definitions are present, so a
+    base class defined in another file is found when the union is passed.
+    """
+    _attach_inherited_fields(all_defs)
+    is_model_name = _model_class_names(all_defs)
 
     result: list[ParsedModel] = []
     for m in all_defs:
@@ -998,9 +1058,378 @@ def _module_files(module: str, from_file: str, root: Path) -> list[Path]:
     return out
 
 
+@dataclass
+class _ModuleClasses:
+    classes: dict[str, list[str]]
+    imports: dict[str, tuple[str, str | None]]
+    star_modules: tuple[str, ...]
+
+
+def _iter_top_stmts(body: Sequence[ast.stmt]) -> Iterable[ast.stmt]:
+    for stmt in body:
+        if isinstance(stmt, ast.If):
+            yield from _iter_top_stmts(stmt.body)
+            yield from _iter_top_stmts(stmt.orelse)
+        elif isinstance(stmt, ast.Try):
+            yield from _iter_top_stmts(stmt.body)
+            for handler in stmt.handlers:
+                yield from _iter_top_stmts(handler.body)
+            yield from _iter_top_stmts(stmt.orelse)
+            yield from _iter_top_stmts(stmt.finalbody)
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            yield from _iter_top_stmts(stmt.body)
+        else:
+            yield stmt
+
+
+def _strip_brackets(text: str) -> str:
+    out: list[str] = []
+    depth = 0
+    for ch in text:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _parse_module_classes(content: str) -> _ModuleClasses:
+    """Extract module-level class bases and imports for custom-field resolution."""
+    if content.startswith("\ufeff"):
+        content = content[1:]
+    try:
+        tree = parse_source(content)
+    except SyntaxError:
+        classes_fb: dict[str, list[str]] = {}
+        lines = [line.expandtabs(4) for line in content.splitlines()]
+        in_string = _lines_inside_strings(lines)
+        i = 0
+        while i < len(lines):
+            if i in in_string:
+                i += 1
+                continue
+            line = lines[i]
+            indent = len(line) - len(line.lstrip())
+            probe = line if indent == 0 else line.lstrip()
+            m = CLASS_RE.match(probe)
+            end = i
+            if m and indent and not _encloses_only_blocks(lines, i, indent):
+                i += 1
+                continue
+            if not m and indent == 0 and CLASS_START_RE.match(line):
+                m, end = _read_multiline_class(lines, i)
+            if m:
+                raw_bases = _strip_brackets(m.group(2))
+                bases = [
+                    b.strip()
+                    for b in raw_bases.split(",")
+                    if b.strip() and "=" not in b
+                ]
+                existing = classes_fb.setdefault(m.group(1), [])
+                for b in bases:
+                    if b not in existing:
+                        existing.append(b)
+            i = end + 1
+        return _ModuleClasses(
+            classes=classes_fb,
+            imports=_parse_imports(content),
+            star_modules=(),
+        )
+
+    classes: dict[str, list[str]] = {}
+    imports: dict[str, tuple[str, str | None]] = {}
+    star_modules: list[str] = []
+    for stmt in _iter_top_stmts(tree.body):
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                if alias.asname:
+                    imports.setdefault(alias.asname, (alias.name, None))
+                else:
+                    head = alias.name.split(".")[0]
+                    imports.setdefault(head, (head, None))
+        elif isinstance(stmt, ast.ImportFrom):
+            prefix = "." * (stmt.level or 0) + (stmt.module or "")
+            for alias in stmt.names:
+                if alias.name == "*":
+                    if prefix and prefix not in star_modules:
+                        star_modules.append(prefix)
+                else:
+                    bound = alias.asname or alias.name
+                    imports.setdefault(bound, (prefix, alias.name))
+        elif isinstance(stmt, ast.ClassDef):
+            existing = classes.setdefault(stmt.name, [])
+            for base_node in stmt.bases:
+                cur: ast.AST = base_node
+                while isinstance(cur, ast.Subscript):
+                    cur = cur.value
+                dotted = _dotted_name(cur)
+                if dotted and dotted not in existing:
+                    existing.append(dotted)
+    return _ModuleClasses(
+        classes=classes,
+        imports=imports,
+        star_modules=tuple(star_modules),
+    )
+
+
+_POSTGRES_FIELD_MODULES = (
+    "django.contrib.postgres.fields",
+    "django.contrib.postgres.search",
+)
+_MPTT_FIELD_MODULES = ("mptt.fields", "mptt.models")
+_TAGGIT_FIELD_MODULES = ("taggit.managers", "taggit.models")
+
+
+def _in_module_roots(module: str, roots: tuple[str, ...]) -> bool:
+    return any(module == r or module.startswith(f"{r}.") for r in roots)
+
+
+def _is_django_field_module(module: str) -> bool:
+    return (
+        _in_module_roots(module, ("django.db.models", "django.contrib.gis.db.models"))
+        or _in_module_roots(module, _POSTGRES_FIELD_MODULES)
+        or _in_module_roots(module, _MPTT_FIELD_MODULES)
+        or _in_module_roots(module, _TAGGIT_FIELD_MODULES)
+    )
+
+
+def _django_field_from_symbol(module: str, symbol: str) -> str | None:
+    if not _is_django_field_module(module):
+        return None
+    if symbol in _BARE_FIELD_NAMES or symbol == "Field":
+        return symbol
+    if (
+        symbol.endswith("Field")
+        and symbol not in ("RelatedField", "ForeignObjectRel")
+        and (
+            module == "django.db.models"
+            or module.startswith("django.db.models.")
+            or module.startswith("django.contrib.")
+        )
+    ):
+        return symbol
+    return None
+
+
+_EXTERNAL_NON_MODEL_PREFIXES = (
+    "django.",
+    "rest_framework.",
+    "wtforms.",
+    "marshmallow.",
+    "pydantic.",
+)
+_MAX_CLASS_DEPTH = 20
+
+
+def _resolve_field_candidates(
+    all_defs: Sequence[ParsedModel],
+    candidates: Sequence[_FieldCandidate],
+    root: Path | None,
+    excludes: Sequence[str],
+    preloaded: dict[Path, str] | None = None,
+) -> None:
+    """Resolve project-defined Django field subclasses in ``candidates`` (#254).
+
+    Walks class bases within the declaring file and across workspace imports
+    (re-exports, relative imports, and ``src/`` layouts via :func:`_module_files`)
+    until reaching a known Django field class, then attaches the resulting
+    :class:`ParsedField` with that base's field type in source line order.
+    """
+    model_names = _model_class_names(all_defs)
+    relevant = [
+        c
+        for c in candidates
+        if c.model.name in model_names or _is_abstract(c.model)
+    ]
+    if not relevant:
+        return
+
+    def norm(p: Path) -> Path:
+        return p.resolve() if root is not None else p
+
+    loaded: dict[Path, _ModuleClasses | None] = {}
+    if preloaded:
+        for p, src in preloaded.items():
+            loaded[norm(p)] = _parse_module_classes(src)
+
+    def load_info(path: Path) -> _ModuleClasses | None:
+        key = norm(path)
+        if key in loaded:
+            return loaded[key]
+        loaded[key] = None
+        if root is None:
+            return None
+        try:
+            rel = key.relative_to(root).as_posix()
+        except ValueError:
+            return None
+        if any(fnmatch(rel, pat) for pat in excludes) or not key.is_file():
+            return None
+        try:
+            content = key.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if is_sqlalchemy_only_source(content):
+            return None
+        loaded[key] = _parse_module_classes(content)
+        return loaded[key]
+
+    memo: dict[tuple[Path, str], str | None] = {}
+
+    def resolve_ref(
+        path: Path,
+        ref: str,
+        hops: int,
+        stack: frozenset[tuple[Path, str]],
+    ) -> str | None:
+        key = norm(path)
+        if (
+            hops > _MAX_IMPORT_HOPS
+            or len(stack) > _MAX_CLASS_DEPTH
+            or (key, ref) in stack
+        ):
+            return None
+        if not stack and (key, ref) in memo:
+            return memo[(key, ref)]
+        info = load_info(key)
+        if info is None:
+            return None
+        next_stack = stack | {(key, ref)}
+        *qual, name = ref.split(".")
+        result: str | None = None
+
+        if not qual:
+            if name in info.classes:
+                for base in info.classes[name]:
+                    found = resolve_ref(key, base, hops, next_stack)
+                    if found is not None:
+                        result = found
+                        break
+            elif name in info.imports:
+                mod, imported_name = info.imports[name]
+                if imported_name is not None:
+                    result = _django_field_from_symbol(mod, imported_name)
+                    if (
+                        result is None
+                        and root is not None
+                        and not mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES)
+                    ):
+                        for cand_path in _module_files(mod, str(key), root):
+                            found = resolve_ref(
+                                cand_path, imported_name, hops + 1, next_stack
+                            )
+                            if found is not None:
+                                result = found
+                                break
+            elif info.star_modules:
+                for star_mod in info.star_modules:
+                    result = _django_field_from_symbol(star_mod, name)
+                    if result is not None:
+                        break
+                if result is None and root is not None:
+                    for star_mod in info.star_modules:
+                        if star_mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES):
+                            continue
+                        for cand_path in _module_files(star_mod, str(key), root):
+                            found = resolve_ref(
+                                cand_path, name, hops + 1, next_stack
+                            )
+                            if found is not None:
+                                result = found
+                                break
+                        if result is not None:
+                            break
+            elif stack and name in _BARE_FIELD_NAMES:
+                # Base of a class in a minimal snippet without import lines.
+                result = name
+        else:
+            head = info.imports.get(qual[0])
+            if head is None:
+                if qual == ["models"]:
+                    result = _django_field_from_symbol("django.db.models", name)
+                elif root is not None and info.star_modules:
+                    for star_mod in info.star_modules:
+                        if star_mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES):
+                            continue
+                        for cand_path in _module_files(star_mod, str(key), root):
+                            found = resolve_ref(cand_path, ref, hops + 1, next_stack)
+                            if found is not None:
+                                result = found
+                                break
+                        if result is not None:
+                            break
+                if not stack:
+                    memo[(key, ref)] = result
+                return result
+
+            if head[1] is None:
+                base_mod = head[0]
+                module = ".".join([base_mod, *qual[1:]]) if qual[1:] else base_mod
+                reexport_lookups = (
+                    [(base_mod, ".".join([*qual[1:], name]))] if qual[1:] else []
+                )
+            else:
+                base_mod = _join_module(head[0], head[1])
+                module = base_mod
+                for part in qual[1:]:
+                    module = _join_module(module, part)
+                reexport_lookups = [
+                    (head[0], ".".join([head[1], *qual[1:], name])),
+                ]
+                if qual[1:]:
+                    reexport_lookups.append(
+                        (base_mod, ".".join([*qual[1:], name]))
+                    )
+
+            result = _django_field_from_symbol(module, name)
+            if result is None and root is not None:
+                for target_mod, sub_ref in reexport_lookups:
+                    if target_mod.startswith(_EXTERNAL_NON_MODEL_PREFIXES):
+                        continue
+                    for cand_path in _module_files(target_mod, str(key), root):
+                        found = resolve_ref(cand_path, sub_ref, hops + 1, next_stack)
+                        if found is not None:
+                            result = found
+                            break
+                    if result is not None:
+                        break
+            if (
+                result is None
+                and root is not None
+                and not module.startswith(_EXTERNAL_NON_MODEL_PREFIXES)
+            ):
+                for cand_path in _module_files(module, str(key), root):
+                    found = resolve_ref(cand_path, name, hops + 1, next_stack)
+                    if found is not None:
+                        result = found
+                        break
+
+        if not stack:
+            memo[(key, ref)] = result
+        return result
+
+    touched: dict[int, ParsedModel] = {}
+    for cand in relevant:
+        ftype = resolve_ref(Path(cand.model.file_path), cand.callee, 0, frozenset())
+        if ftype is None or ftype in _NOT_A_FIELD:
+            continue
+        cand.model.fields.append(
+            _make_parsed_field(cand.name, ftype, cand.args_block, cand.line_number)
+        )
+        touched[id(cand.model)] = cand.model
+
+    for model in touched.values():
+        model.fields.sort(key=lambda f: f.line_number)
+
+
 def _pull_imported_bases(
-    all_defs: list[ParsedModel], root: Path, excludes: Sequence[str]
-) -> list[ParsedModel]:
+    all_defs: list[ParsedModel],
+    root: Path,
+    excludes: Sequence[str],
+    module_sources: dict[Path, str] | None = None,
+) -> tuple[list[ParsedModel], list[_FieldCandidate]]:
     """Definitions of base classes that live outside the scanned model files.
 
     The scan reads ``models.py``-style files only, so ``class Person(MyBase)``
@@ -1012,6 +1441,7 @@ def _pull_imported_bases(
     pulled, so helpers sharing that file never show up as models.
     """
     loaded: dict[Path, tuple[dict[str, ParsedModel], dict] | None] = {}
+    all_candidates: list[_FieldCandidate] = []
 
     def load(path: Path) -> tuple[dict[str, ParsedModel], dict] | None:
         if path in loaded:
@@ -1029,8 +1459,14 @@ def _pull_imported_bases(
             # A SQLAlchemy base (``class CoreModel(Model)`` on
             # Flask-AppBuilder) must not turn its importers into Django models.
             if not is_sqlalchemy_only_source(content):
-                for d in _collect_defs(str(path), content):
+                file_defs, file_cands = _collect_defs_with_candidates(
+                    str(path), content
+                )
+                for d in file_defs:
                     defs.setdefault(d.name, d)
+                all_candidates.extend(file_cands)
+                if module_sources is not None:
+                    module_sources.setdefault(path.resolve(), content)
         except Exception:
             return None
         loaded[path] = (defs, _parse_imports(content))
@@ -1080,7 +1516,9 @@ def _pull_imported_bases(
         known.add(found.name)
         pulled.append(found)
         queue.extend((found.file_path, b) for b in found.base_classes)
-    return pulled
+    pulled_ids = {id(m) for m in pulled}
+    pulled_candidates = [c for c in all_candidates if id(c.model) in pulled_ids]
+    return pulled, pulled_candidates
 
 
 #: Files that declare models but are not named ``models.py``. Pluggable
@@ -1159,6 +1597,8 @@ def scan_workspace(
     """
     root_path = Path(root).resolve()
     all_defs: list[ParsedModel] = []
+    candidates: list[_FieldCandidate] = []
+    module_sources: dict[Path, str] = {}
     scanned_files = 0
     for py in _iter_python_files(root_path, exclude_globs):
         scanned_files += 1
@@ -1169,14 +1609,29 @@ def scan_workspace(
         if is_sqlalchemy_only_source(content):
             continue
         try:
-            all_defs.extend(_collect_defs(str(py), content))
+            file_defs, file_cands = _collect_defs_with_candidates(str(py), content)
         except Exception as exc:
             print(
                 f"warning: skipping {py}: {type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
             continue
-    all_defs.extend(_pull_imported_bases(all_defs, root_path, exclude_globs))
+        module_sources[py.resolve()] = content
+        all_defs.extend(file_defs)
+        candidates.extend(file_cands)
+    pulled_defs, pulled_cands = _pull_imported_bases(
+        all_defs, root_path, exclude_globs, module_sources
+    )
+    all_defs.extend(pulled_defs)
+    candidates.extend(pulled_cands)
+    if candidates:
+        _resolve_field_candidates(
+            all_defs,
+            candidates,
+            root=root_path,
+            excludes=exclude_globs,
+            preloaded=module_sources,
+        )
 
     found = _resolve_and_filter(all_defs)
     # Finding SQLAlchemy models means reading every file, which a big Django

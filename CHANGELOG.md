@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Parser: recognize project-defined Django field subclasses**
+  ([#254](https://github.com/FROWNINGdev/orm-lens/issues/254)).
+  Fields declared with custom subclasses of Django model fields (defined in the
+  same `models.py` or imported from project modules such as `core/fields.py`)
+  now resolve to their underlying Django field type instead of being dropped,
+  keeping relation metadata (`ForeignKey`, `OneToOneField`, `ManyToManyField`)
+  and schema drift checks accurate in the Python CLI.
 - **Parser: ignore Django field examples inside model docstrings.** Both the
   CLI and VS Code now keep those examples out of the model's field list.
 - **suggest-indexes: skip composites over a unique column**
