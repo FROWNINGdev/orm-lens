@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **diff: read the `list --format json` dump its help documents.**
+  `list --format json` writes a flat `[{app, model}]` array, but `_index_models`
+  only understood `{"apps": [...]}`. Both sides indexed as empty, so two dumps
+  that differ printed `No schema changes.` and exited 0. The list shape is now
+  read and reports the model additions/removals that format contains. When
+  only one side is a list dump, the diff stops at model level: marking every
+  field of the other side as removed would be false.
+
 - **Docs: `--path` / `--exclude` and the MCP tool list**
   ([#282](https://github.com/FROWNINGdev/orm-lens/issues/282)).
   The READMEs said every command takes `--path` and `--exclude`; `stats-sql`
