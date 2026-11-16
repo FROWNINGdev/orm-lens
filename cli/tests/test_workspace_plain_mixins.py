@@ -385,5 +385,61 @@ class PlainAbstractFlagDoesNotContributeFieldsTest(unittest.TestCase):
         self.assertEqual([f.name for f in models[0].inherited_fields], ["owner"])
 
 
+KNOWN_NON_MODEL_BASE_SOURCE = """
+from django.db import models
+
+
+class QueryMixin(models.QuerySet):
+    def alive(self):
+        return self
+
+
+class FieldMixin(QueryMixin):
+    label = models.CharField(max_length=30)
+
+    class Meta:
+        abstract = True
+
+
+class Project(FieldMixin, models.Model):
+    title = models.CharField(max_length=100)
+"""
+
+EXTERNAL_MODEL_BASE_SOURCE = """
+from django.contrib.auth.models import Group
+from django.db import models
+
+
+class AuditMixin(Group):
+    owner = models.CharField(max_length=50)
+
+    class Meta:
+        abstract = True
+
+
+class Project(AuditMixin, models.Model):
+    title = models.CharField(max_length=100)
+"""
+
+
+class AncestryResolutionTest(unittest.TestCase):
+    def test_known_non_model_base_does_not_contribute_fields(self) -> None:
+        # QueryMixin is dropped as a known non-model QuerySet base. Its
+        # abstract subclass must not launder that into model ancestry
+        # (#249 follow-up).
+        models = parse_models_file("pages/models.py", KNOWN_NON_MODEL_BASE_SOURCE)
+        self.assertEqual([m.name for m in models], ["Project"])
+        self.assertEqual(models[0].inherited_fields, [])
+        self.assertEqual([f.name for f in models[0].all_fields()], ["title"])
+
+    def test_external_model_base_still_contributes_fields(self) -> None:
+        # Group comes from django.contrib.auth and is not in the workspace.
+        # The scanner cannot prove it is a non-model, so the abstract parent
+        # keeps contributing its local fields, as it did before #249.
+        models = parse_models_file("pages/models.py", EXTERNAL_MODEL_BASE_SOURCE)
+        self.assertEqual([m.name for m in models], ["Project"])
+        self.assertEqual([f.name for f in models[0].inherited_fields], ["owner"])
+
+
 if __name__ == "__main__":
     unittest.main()

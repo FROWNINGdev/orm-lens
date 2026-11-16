@@ -899,21 +899,30 @@ def _has_model_ancestry(
     by_name: dict[str, list[ParsedModel]],
     resolver: _WorkspaceResolver | None,
     seen: frozenset[tuple[str, str]] = frozenset(),
+    known_non_models: dict[str, set[str]] | None = None,
 ) -> bool:
-    """Does ``model``'s own base chain reach a Django model root?
+    """Whether ``model``'s base chain can reach a Django model root.
 
     ``Meta.abstract = True`` alone does not make a class an abstract *model*:
-    Django copies fields only from bases that are models, so a plain helper
-    that happens to set ``abstract`` must not contribute columns (#249
-    follow-up). A base the scanner cannot see keeps the name guess, which is
-    what lets a third-party model mixin still contribute.
+    Django copies fields only from bases that are models, so a class whose
+    whole chain is workspace classes and known non-model tails
+    (QuerySet/Manager and friends) must not contribute columns (#249
+    follow-up).
+
+    A base outside the workspace that the scanner cannot read is *unknown*,
+    not proven non-model: it may itself be a Django model
+    (``AbstractAudit(Group)``), and Django copies an abstract parent's local
+    fields. Those stay inherited rather than being dropped on a name guess.
     """
     key = (model.file_path, model.name)
     if key in seen:
         return False
     seen = seen | {key}
+    non_models = (known_non_models or {}).get(model.file_path, ())
     for base in model.base_classes:
         tail = base.split(".")[-1]
+        if tail in non_models:
+            continue
         if re.search(r"models\.Model$", base) or _MODEL_ROOT_TAIL.match(tail):
             return True
         known, parent = (
@@ -925,7 +934,7 @@ def _has_model_ancestry(
             parent = _pick_base(by_name.get(tail, []), model)
         if parent is not None:
             if parent is not model and _has_model_ancestry(
-                parent, by_name, resolver, seen
+                parent, by_name, resolver, seen, known_non_models
             ):
                 return True
             continue
@@ -933,8 +942,8 @@ def _has_model_ancestry(
             # A workspace class the scanner dropped as a non-model
             # (a QuerySet/Manager mixin) cannot be an abstract model.
             continue
-        if re.search(r"Mixin$", tail) or re.match(r"^Abstract[A-Z]", tail):
-            return True
+        # Unresolved external base: keep the inherited fields, as before.
+        return True
     return False
 
 
@@ -943,6 +952,7 @@ def _abstract_bases_fields(
     by_name: dict[str, list[ParsedModel]],
     stack: tuple[str, ...] = (),
     resolver: _WorkspaceResolver | None = None,
+    known_non_models: dict[str, set[str]] | None = None,
 ) -> list[ParsedField]:
     """Fields ``model`` inherits from its abstract bases, parent-first.
 
@@ -988,11 +998,12 @@ def _abstract_bases_fields(
             by_name,
             resolver,
             frozenset({(model.file_path, model.name)}),
+            known_non_models,
         ):
             continue
         contributed = [
             *_abstract_bases_fields(
-                parent, by_name, (*stack, target), resolver
+                parent, by_name, (*stack, target), resolver, known_non_models
             ),
             *(
                 replace(f, inherited_from=f.inherited_from or parent.name)
@@ -1010,6 +1021,7 @@ def _abstract_bases_fields(
 def _attach_inherited_fields(
     all_defs: list[ParsedModel],
     resolver: _WorkspaceResolver | None = None,
+    known_non_models: dict[str, set[str]] | None = None,
 ) -> None:
     """Populate ``inherited_fields`` on every def, in place.
 
@@ -1027,7 +1039,9 @@ def _attach_inherited_fields(
         own = {f.name for f in m.fields}
         m.inherited_fields = [
             f
-            for f in _abstract_bases_fields(m, by_name, resolver=resolver)
+            for f in _abstract_bases_fields(
+                m, by_name, resolver=resolver, known_non_models=known_non_models
+            )
             if f.name not in own
         ]
 
@@ -1054,7 +1068,7 @@ def _resolve_and_filter(
     file, so the single-file path treats a QuerySet/Manager base as
     workspace-defined too.
     """
-    _attach_inherited_fields(all_defs, resolver)
+    _attach_inherited_fields(all_defs, resolver, known_non_models)
     if resolver is None:
         names_by_file: dict[str, set[str]] = {}
         for m in all_defs:
