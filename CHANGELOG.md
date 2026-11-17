@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [py-1.18.1] - 2026-11-17
+
+> Fewer false N+1, drift and migration alarms on real projects.
+
 ### Fixed
 
 - **migration-risk: treat annotated or partly computed `dependencies` as unknown**
@@ -93,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Parser: ignore Django field examples inside model docstrings.** Both the
   CLI and VS Code now keep those examples out of the model's field list.
+
 - **suggest-indexes: skip composites over a unique column**
   ([#269](https://github.com/FROWNINGdev/orm-lens/issues/269)).
   A combo containing the primary key, a `unique=True` field or a
@@ -104,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#268](https://github.com/FROWNINGdev/orm-lens/issues/268)).
   `conflicting_migration_leaves` / `alembic_multiple_heads` now print
   `(migration graph) shop` instead of `shop.None`.
+
 - **suggest-indexes: only propose indexes on local columns**
   ([#252](https://github.com/FROWNINGdev/orm-lens/issues/252)).
   Many-to-many and reverse relation lookups still appear in usage counts,
@@ -126,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `models.Manager`, ...) also stops its subclasses from becoming models. A
   real abstract mixin is still found through its `models.Model` base, and a
   third-party `*Mixin` the scanner cannot see keeps the guess.
+
 - **Abstract bases with the same class name are matched by `(file, name)`,
   not bare name** ([#249](https://github.com/FROWNINGdev/orm-lens/issues/249)).
   When two apps defined a base with the same class name, a model could
@@ -133,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base was treated as already known. Bases are now identified by the file
   their import resolves to, so a model inherits the fields of its own app's
   base instead of another app's.
+
 - **nplusone: no `select_related` for a scalar when the loop's model is
   unknown** ([#251](https://github.com/FROWNINGdev/orm-lens/issues/251)).
   `for e in self.events.all(): e.date_from.astimezone(tz)` was guessed to be a
@@ -148,6 +156,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **signals: resolve aliased `receiver` imports.** Imports such as
   `from django.dispatch import receiver as on` and `import django.dispatch as d`
   are now resolved when matching `@receiver` decorators ([#261](https://github.com/FROWNINGdev/orm-lens/issues/261)).
+
+- **Migration files without a four-digit prefix are read**
+  ([#246](https://github.com/FROWNINGdev/orm-lens/issues/246)).
+  Django loads every module in `migrations/` whose name does not start with
+  `_` or `~`, so hand-inserted `0162b_auto_...py` and legacy `008_...py` files
+  are real migrations. orm-lens skipped them, which hid an `AddField` from
+  `drift` and split the graph into false conflicting leaves. They are now
+  loaded and ordered by their numeric prefix.
+
+- **drift: `state_operations` bound inside the `Migration` class is resolved**
+  ([#245](https://github.com/FROWNINGdev/orm-lens/issues/245)).
+  `SeparateDatabaseAndState(state_operations=state_operations)` with the list
+  on the class, as Django's docs write it, was dropped, so its `CreateModel`
+  never counted and `drift` blocked on a migrated model.
+
+## [0.22.1] - 2026-11-17
+
+> Model rules read translated verbose_name; auth fields counted.
+
+### Fixed
+
+- **Count the fields Django's auth bases give a custom user model**
+  ([#267](https://github.com/FROWNINGdev/orm-lens/issues/267)).
+  A model built on `AbstractBaseUser`, `PermissionsMixin` or `AbstractUser`
+  now inherits their fields (`password`, `last_login`, `is_superuser`,
+  `groups`, `user_permissions`, and the profile fields of `AbstractUser`) in
+  both parsers, so `drift` no longer reports them as migrated but no longer
+  declared. A workspace class with the same name still wins, a field the
+  model sets to `None` (`username = None`) stays removed, and an abstract
+  parent's own field now overrides the same field from its ancestors.
+
+- **VS Code rules DOL011 / DOL014 / DOL015 read past nested calls.**
+  `CharField(max_length=100, verbose_name=_("Name"), null=True)` was never
+  matched: the rules scanned the call with `([^()]*)`, which stops at the
+  paren inside `_("Name")`. i18n-wrapped fields escaped the `null=True`,
+  missing-`max_length` and `TextField(max_length=)` checks. All three now use
+  the same `readCallArgs` helper DOL013 already used.
+
+- **Parser: ignore Django field examples inside model docstrings.** Both the
+  CLI and VS Code now keep those examples out of the model's field list.
+
+- **suggest-indexes: only propose indexes on local columns**
+  ([#252](https://github.com/FROWNINGdev/orm-lens/issues/252)).
+  Many-to-many and reverse relation lookups still appear in usage counts,
+  but no longer produce invalid `Meta.indexes` suggestions. Django field imports
+  that use an alias keep their original field type in both parsers.
+
+- **Recognize directly imported Django field types** ([#250](https://github.com/FROWNINGdev/orm-lens/issues/250)).
+  The CLI and VS Code parsers now recognize `GeneratedField` and PostgreSQL
+  fields such as `ArrayField`, `HStoreField`, range fields, and
+  `SearchVectorField`. Schema drift checks can now match those declarations
+  to their migrations.
 
 ## [py-1.18.0] - 2026-11-11
 
