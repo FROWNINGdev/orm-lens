@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **migration-risk: treat annotated or partly computed `dependencies` as unknown**
+  ([#280](https://github.com/FROWNINGdev/orm-lens/issues/280)).
+  Annotated assignments (`dependencies: list = get_dependencies()`) and
+  lists containing computed pairs (`[("shop", get_parent())]`) are now marked
+  `dependencies_unknown`, while recognizing `swappable_dependency(...)` as a
+  known dependency element, preventing false conflicting leaf reports.
+
 - **diff: read the `list --format json` dump its help documents.**
   `list --format json` writes a flat `[{app, model}]` array, but `_index_models`
   only understood `{"apps": [...]}`. Both sides indexed as empty, so two dumps
