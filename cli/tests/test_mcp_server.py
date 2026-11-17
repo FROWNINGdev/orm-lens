@@ -558,6 +558,66 @@ class QualifiedRelationTargetTest(unittest.TestCase):
         )
 
 
+class AppConfigLabelAliasTest(unittest.TestCase):
+    """A FK string carries the app *label*, which an ``AppConfig`` renames
+    (wagtail's ``images/`` app is labelled ``wagtailimages``). When no
+    workspace app is named ``wagtailimages``, the prefix cannot filter: the
+    row belongs to ``images.Image`` and must be reported."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="djol-label-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        (self.tmp / "manage.py").write_text("", encoding="utf-8")
+        images = self.tmp / "images"
+        images.mkdir()
+        (images / "__init__.py").write_text("", encoding="utf-8")
+        (images / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Image(models.Model):\n"
+            "    title = models.CharField(max_length=10)\n",
+            encoding="utf-8",
+        )
+        redirects = self.tmp / "redirects"
+        redirects.mkdir()
+        (redirects / "__init__.py").write_text("", encoding="utf-8")
+        (redirects / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Redirect(models.Model):\n"
+            "    image = models.ForeignKey(\n"
+            "        'wagtailimages.Image', on_delete=models.CASCADE,\n"
+            "    )\n",
+            encoding="utf-8",
+        )
+        clear_cache()
+        self.addCleanup(clear_cache)
+
+    def test_find_relations_matches_the_aliased_app(self) -> None:
+        payload = json.loads(
+            _tool_find_relations(
+                {"workspace_root": str(self.tmp), "model": "images.Image"}
+            )
+        )
+        self.assertEqual(
+            [(rel["from"], rel["field"]) for rel in payload["inbound"]],
+            [("redirects.Redirect", "image")],
+        )
+
+    def test_cascade_preview_matches_the_aliased_app(self) -> None:
+        payload = json.loads(
+            _tool_cascade_preview(
+                {
+                    "workspace_root": str(self.tmp),
+                    "app_label": "images",
+                    "model_name": "Image",
+                }
+            )
+        )
+        self.assertEqual(
+            [entry["model"] for entry in payload["cascade_kills"]],
+            ["redirects.Redirect"],
+        )
+
+
 class ImpactToolSchemaTest(unittest.TestCase):
     """``impact`` must accept the ``name`` argument its description asks for.
 

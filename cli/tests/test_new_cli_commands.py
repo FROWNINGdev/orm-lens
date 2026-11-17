@@ -175,6 +175,62 @@ class CascadeCommandTest(unittest.TestCase):
                 ["shop.Post"],
             )
 
+    def test_app_config_label_prefix_falls_back_to_model_name(self) -> None:
+        """A FK string carries Django's app *label*, which an ``AppConfig``
+        can set to something other than the directory name. Wagtail labels
+        its ``images/`` app ``wagtailimages``, so ``"wagtailimages.Image"``
+        names the model in ``images``: filtering by directory name dropped
+        every such row from the preview. A row that exists but is missing is
+        the worst way for a delete preview to be wrong."""
+        with TemporaryDirectory() as tmp:
+            _write(
+                Path(tmp) / "images" / "models.py",
+                "from django.db import models\n\n"
+                "class Image(models.Model):\n"
+                "    title = models.CharField(max_length=10)\n",
+            )
+            _write(
+                Path(tmp) / "wagtail" / "models.py",
+                "from django.db import models\n\n"
+                "class Site(models.Model):\n"
+                "    hostname = models.CharField(max_length=10)\n",
+            )
+            _write(
+                Path(tmp) / "redirects" / "models.py",
+                "from django.db import models\n\n"
+                "class Redirect(models.Model):\n"
+                "    site = models.ForeignKey(\n"
+                "        'wagtailcore.Site', on_delete=models.CASCADE,\n"
+                "    )\n"
+                "    image = models.ForeignKey(\n"
+                "        'wagtailimages.Image', on_delete=models.CASCADE,\n"
+                "    )\n",
+            )
+
+            code, out, _err = _run(
+                ["cascade", "images.Image", "--path", tmp, "--format", "json"]
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                [
+                    (entry["model"], entry["via_field"])
+                    for entry in json.loads(out)["cascade_kills"]
+                ],
+                [("redirects.Redirect", "image")],
+            )
+
+            code, out, _err = _run(
+                ["cascade", "wagtail.Site", "--path", tmp, "--format", "json"]
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                [
+                    (entry["model"], entry["via_field"])
+                    for entry in json.loads(out)["cascade_kills"]
+                ],
+                [("redirects.Redirect", "site")],
+            )
+
     def test_qualified_inherited_relation_is_not_matched(self) -> None:
         """The app label of an inherited FK is matched too, not just the name."""
         with TemporaryDirectory() as tmp:

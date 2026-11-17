@@ -50,7 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `find_relations` showed no outbound edge. The inbound match also compared
   only the model name, so `ForeignKey("billing.Owner")` appeared under
   `shop.Owner` when both apps define `Owner`. Both now read `all_fields()`
-  and compare the app label of a qualified reference.
+  and compare the app label of a qualified reference. A label that names no
+  workspace app keeps matching by model name alone: an `AppConfig` can rename
+  an app (`ForeignKey("wagtailimages.Image")` for an `images/` app), and a
+  delete preview must not hide a row it cannot disprove.
 
 - **nplusone: `Prefetch(..., queryset=...select_related(...))` covers the inner loop.**
   `Prefetch("items", queryset=OrderItem.objects.select_related("product"))` loads

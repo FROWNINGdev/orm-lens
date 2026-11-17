@@ -46,6 +46,7 @@ from .models import (
     find_model,
     find_user_model,
     relation_points_at,
+    workspace_app_names,
 )
 from .query_analyzer import suggest_indexes as _suggest_indexes
 from .signals_parser import signal_graph as _signal_graph
@@ -102,16 +103,20 @@ def _workspace_user_model(idx: WorkspaceIndex):
 
 
 def _rel_matches_target(
-    related_model, target_name, user_model, target_app=None
+    related_model, target_name, user_model, target_app=None, known_apps=None
 ) -> bool:
     """True iff ``related_model`` points at ``target_name`` in the target app.
 
     ``settings.AUTH_USER_MODEL`` is resolved through the workspace user model;
     a qualified ``app.Model`` must name the same app, so ``billing.Owner``
-    does not match ``shop.Owner``.
+    does not match ``shop.Owner``. ``known_apps`` is the scan's app names: a
+    prefix naming none of them is an ``AppConfig`` label alias
+    (``wagtailimages`` for ``images/``) and matches on the model name alone.
     """
     user_name = user_model.name if user_model is not None else None
-    return relation_points_at(related_model, target_name, target_app, user_name)
+    return relation_points_at(
+        related_model, target_name, target_app, user_name, known_apps
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +194,7 @@ def _tool_find_relations(args: dict[str, Any]) -> str:
             )
     _, user_model = _workspace_user_model(idx)
     target_app = next((app.name for app in idx.apps if m in app.models), None)
+    known_apps = workspace_app_names(idx)
     for app in idx.apps:
         for other in app.models:
             if other is m:
@@ -197,7 +203,7 @@ def _tool_find_relations(args: dict[str, Any]) -> str:
                 if not f.is_relation:
                     continue
                 if not _rel_matches_target(
-                    f.related_model, m.name, user_model, target_app
+                    f.related_model, m.name, user_model, target_app, known_apps
                 ):
                     continue
                 out["inbound"].append(
