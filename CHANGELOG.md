@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VS Code rules DOL001-DOL004 skip a match that is an operand of an operator**
+  ([#293](https://github.com/FROWNINGdev/orm-lens/issues/293)).
+  In `if event.capacity - event.registrations.count() > 0:` Python tests the
+  whole difference, so the safe fix `event.capacity - event.registrations.exists()`
+  made a full event look open, and DOL002's rewrite
+  `event.capacity - not event.registrations.exists()` was a SyntaxError. Matches after an arithmetic, bitwise or comparison operator are
+  now left alone; assignment and augmented assignment still get the finding.
+
 ## [py-1.18.1] - 2026-11-17
 
 > Fewer false N+1, drift and migration alarms on real projects.
