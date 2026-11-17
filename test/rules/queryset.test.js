@@ -82,12 +82,13 @@ test('DOL001-DOL004 skip a match that is an operand of an operator', () => {
     ['DOL002', 'is_full = event.capacity - event.registrations.count() == 0'],
     ['DOL002', 'if a.count() + b.count() == 0:'],
     ['DOL003', 'if prev == qs.first() is None:'],
+    ['DOL004', 'if prev == qs.first() is not None:'],
   ]) {
     assert.equal(ruleByCode(code).check(makeCtx(line)).length, 0, line);
   }
 });
 
-test('DOL001 and DOL002 still flag a count after =, not, and, (, comma', () => {
+test('DOL001 and DOL002 still flag a count after =, not, and, (, comma, augmented =', () => {
   for (const [code, line] of [
     ['DOL001', 'has_any = qs.count() > 0'],
     ['DOL001', 'if not post.comments.count() > 0:'],
@@ -95,6 +96,8 @@ test('DOL001 and DOL002 still flag a count after =, not, and, (, comma', () => {
     ['DOL001', 'print(qs.count() > 0)'],
     ['DOL002', 'f(x, qs.count() == 0)'],
     ['DOL002', 'flag |= qs.count() == 0'],
+    ['DOL001', 'n += qs.count() > 0'],
+    ['DOL001', 'n <<= qs.count() > 0'],
   ]) {
     assert.equal(ruleByCode(code).check(makeCtx(line)).length, 1, line);
   }
