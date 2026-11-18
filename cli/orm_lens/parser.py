@@ -306,12 +306,17 @@ def _finalize_cond_chain(chain: _CondChain) -> list[ParsedField]:
 
     guaranteed: list[ParsedField] = []
     seen: set[str] = set()
+    success_scope = _FieldScope(items=[*chain.branches[0].items, *chain.try_else.items])
     if len(chain.branches) > 1:
-        success_scope = _FieldScope(items=[*chain.branches[0].items, *chain.try_else.items])
-        for parsed_field in _intersect_branch_fields([success_scope, *chain.branches[1:]]):
-            if parsed_field.name not in seen:
-                seen.add(parsed_field.name)
-                guaranteed.append(parsed_field)
+        try_fields = _intersect_branch_fields([success_scope, *chain.branches[1:]])
+    else:
+        # With no `except`, an exception in the try body aborts the class body,
+        # so every class that gets created ran the whole try body.
+        try_fields = success_scope.items
+    for parsed_field in try_fields:
+        if parsed_field.name not in seen:
+            seen.add(parsed_field.name)
+            guaranteed.append(parsed_field)
     for parsed_field in chain.finally_scope.items:
         if parsed_field.name not in seen:
             seen.add(parsed_field.name)

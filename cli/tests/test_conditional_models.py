@@ -446,6 +446,30 @@ class ConditionalBodyFieldTests(unittest.TestCase):
         self.assertEqual([f.name for f in got[0].fields], ["title"])
         self.assertEqual(got[0].fields[0].type, "TextField")
 
+    def test_try_body_fields_kept_with_finally_and_intersected_with_except(self) -> None:
+        src = (
+            "from django.db import models\n"
+            "\n"
+            "class Article(models.Model):\n"
+            "    try:\n"
+            "        title = models.TextField()\n"
+            "    finally:\n"
+            "        pass\n"
+            "\n"
+            "class Note(models.Model):\n"
+            "    try:\n"
+            "        body = models.TextField()\n"
+            "        only_try = models.IntegerField()\n"
+            "    except Exception:\n"
+            "        body = models.CharField(max_length=10)\n"
+            "    finally:\n"
+            "        stamp = models.DateTimeField()\n"
+        )
+        got = parse_models_file("news/models.py", src)
+        self.assertEqual([m.name for m in got], ["Article", "Note"])
+        self.assertEqual([f.name for f in got[0].fields], ["title"])
+        self.assertEqual([f.name for f in got[1].fields], ["body", "stamp"])
+
 
 if __name__ == "__main__":
     unittest.main()
