@@ -144,7 +144,9 @@ class ParsedModel:
     """Names the class body sets to ``None``, which removes a field inherited
     from an abstract base (``username = None`` on an ``AbstractUser``)."""
     implicit_parent_links: set[str] = field(default_factory=set)
-    """Auto-created Django parent-link columns, used only for schema checks."""
+    """Auto-created Django parent-link columns that can suppress drift advisories."""
+    mptt_field_names: dict[str, str | None] = field(default_factory=dict, repr=False, compare=False)
+    """Internal MPTTMeta names, with None for a dynamically set name."""
 
     def all_fields(self) -> list[ParsedField]:
         """Every field on this model's own table, parent-first.
