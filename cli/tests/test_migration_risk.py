@@ -163,6 +163,46 @@ class AddFieldNotNullTest(unittest.TestCase):
                 "add_field_not_null_no_default", _by_rule(findings)
             )
 
+    def _split_initial(self, tmp: str, second_initial: bool) -> list[MigrationRisk]:
+        """makemigrations splits an initial migration when apps point at each other:
+        0001 creates the tables, 0002 adds the cross-app foreign key."""
+        flag = "    initial = True\n" if second_initial else ""
+        app = Path(tmp) / "build"
+        _write(
+            app,
+            "0001_initial",
+            "from django.db import migrations, models\n"
+            "class Migration(migrations.Migration):\n"
+            "    initial = True\n"
+            "    dependencies = []\n"
+            "    operations = [migrations.CreateModel(name='Build', fields=[])]\n",
+        )
+        _write(
+            app,
+            "0002_auto_20190520_2204",
+            "from django.db import migrations, models\n"
+            "class Migration(migrations.Migration):\n"
+            + flag
+            + "    dependencies = [('build', '0001_initial')]\n"
+            "    operations = [\n"
+            "        migrations.AddField(model_name='build', name='part',\n"
+            "            field=models.ForeignKey(on_delete=models.CASCADE, to='part.Part')),\n"
+            "    ]\n",
+        )
+        return analyze_migration_risks(tmp, current_schema=_empty_schema())
+
+    def test_negative_second_initial_migration_is_safe(self) -> None:
+        """A 0002 marked ``initial = True`` only runs on a fresh database."""
+        with TemporaryDirectory() as tmp:
+            findings = self._split_initial(tmp, second_initial=True)
+            self.assertNotIn("add_field_not_null_no_default", _by_rule(findings))
+
+    def test_positive_same_migration_without_initial_still_flagged(self) -> None:
+        """Without ``initial = True`` the same operation is still critical."""
+        with TemporaryDirectory() as tmp:
+            findings = self._split_initial(tmp, second_initial=False)
+            self.assertIn("add_field_not_null_no_default", _by_rule(findings))
+
 
 # ---------------------------------------------------------------------------
 # Rule 2a/2b: RemoveField / DeleteModel cross-reference

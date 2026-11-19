@@ -792,6 +792,9 @@ class MigrationRiskAnalyzer:
         # database. Where the replaced migrations are applied, Django marks it
         # applied without running it, so it never touches populated tables.
         self.is_squashed = False
+        # `initial = True` (both halves of a split initial migration) also only
+        # ever runs on a database where the app has no tables yet.
+        self.is_initial = False
         # (line, model, field-or-None) for every operation that brings a field
         # or a whole model (back) into existence. A RemoveField followed by an
         # AddField or a RenameField onto the same name, or a DeleteModel
@@ -836,6 +839,12 @@ class MigrationRiskAnalyzer:
                 targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
                 if "replaces" in targets and isinstance(stmt.value, (ast.List, ast.Tuple)):
                     self.is_squashed = bool(stmt.value.elts)
+                if (
+                    "initial" in targets
+                    and isinstance(stmt.value, ast.Constant)
+                    and stmt.value.value is True
+                ):
+                    self.is_initial = True
             for stmt in assigns:
                 targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
                 if "operations" not in targets:
@@ -948,9 +957,12 @@ class MigrationRiskAnalyzer:
         """Heuristic: anything after 0001_initial → assume the table has rows.
 
         Except a table this same migration created, and anything in a
-        squashed migration, which only runs on a fresh database.
+        squashed or ``initial = True`` migration: those only run on a fresh
+        database (or are faked with ``--fake-initial``). ``makemigrations``
+        marks both halves of a split initial migration (``0001`` creating
+        tables, ``0002`` adding cross-app foreign keys) as ``initial``.
         """
-        if self.is_squashed:
+        if self.is_squashed or self.is_initial:
             return False
         if isinstance(model, str) and model.lower() in self.created_models:
             return False
