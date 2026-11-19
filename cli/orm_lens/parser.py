@@ -814,8 +814,13 @@ def _collect_defs(
     content: str,
     non_model_names: set[str] | None = None,
     field_aliases: dict[str, str] | None = None,
+    scope: str = "",
 ) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
+
+    *scope* (``"Outer."``) is the dotted path of the class body *content* was
+    cut from, so the abstract models nested in its classes come back named,
+    and their bases resolved, from the module down.
 
     No transitive resolution or abstract filtering — callers combine the
     result with definitions from other files before calling
@@ -1102,7 +1107,7 @@ def _collect_defs(
                 class_header_end + 1,
                 j,
                 indent,
-                model_name,
+                f"{scope}{model_name}",
             )
         )
         i = j
@@ -1132,6 +1137,7 @@ def _nested_abstract_defs(
     nested ``TextChoices`` or concrete class adds nothing.
     """
     out: list[ParsedModel] = []
+    direct: list[ParsedModel] = []
     # Every nested class binds its name in the body, abstract model or not.
     bound: list[tuple[int, str]] = []
     k = start
@@ -1155,10 +1161,15 @@ def _nested_abstract_defs(
             for line in lines[k:stop]
         )
         # The block is parsed alone, so it gets the file's field-import aliases.
-        for nested in _collect_defs(file_path, block, field_aliases=field_aliases):
+        for nested in _collect_defs(
+            file_path, block, field_aliases=field_aliases, scope=f"{outer}."
+        ):
             if not _is_abstract(nested):
                 continue
-            nested.name = f"{outer}.{nested.name}"
+            # A class nested deeper comes back named and resolved in its own body.
+            if "." not in nested.name:
+                nested.name = f"{outer}.{nested.name}"
+                direct.append(nested)
             nested.line_number += k
             for f in nested.fields:
                 f.line_number += k
@@ -1166,8 +1177,9 @@ def _nested_abstract_defs(
         k = stop
     # A base naming a sibling defined above it (``class NonUnique(Common)``) is
     # that sibling: the class body is the scope its bases are read in, and only
-    # names bound before the class statement are in it.
-    for d in out:
+    # names bound before the class statement are in it. A class body never sees
+    # the enclosing one, so this applies to the direct children only.
+    for d in direct:
         above = {name for line, name in bound if line < d.line_number}
         d.base_classes = [
             f"{outer}.{b}" if b.split(".")[0] in above else b for b in d.base_classes

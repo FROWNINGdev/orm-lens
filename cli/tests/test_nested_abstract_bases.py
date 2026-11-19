@@ -233,5 +233,55 @@ class NestedBaseShapesTest(unittest.TestCase):
         self.assertEqual(self.inherited(mixins), [])
 
 
+class DeeperNestingTest(unittest.TestCase):
+    """An abstract model two class bodies down, ``Outer.Wrapper.Child``."""
+
+    def inherited(self, models_py: str) -> list[tuple[str, str | None]]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in {"lib/__init__.py": "", "lib/models.py": models_py}.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text, encoding="utf-8")
+            models = {m.name: m for a in scan_workspace(tmp).apps for m in a.models}
+            return [(f.name, f.inherited_from) for f in models["Consumer"].inherited_fields]
+
+    def test_base_naming_a_sibling_in_its_own_body(self) -> None:
+        models_py = (
+            "from django.db import models\n\n\n"
+            "class Outer:\n"
+            "    class Wrapper:\n"
+            "        class Named(models.Model):\n"
+            "            name = models.CharField(max_length=10)\n\n"
+            "            class Meta:\n"
+            "                abstract = True\n\n"
+            "        class Child(Named):\n"
+            "            class Meta:\n"
+            "                abstract = True\n\n\n"
+            "class Consumer(Outer.Wrapper.Child, models.Model):\n"
+            "    pass\n"
+        )
+        self.assertEqual(self.inherited(models_py), [("name", "Outer.Wrapper.Named")])
+
+    def test_enclosing_class_name_is_not_in_scope(self) -> None:
+        # Inside Outer.Wrapper's body ``Wrapper`` is not bound yet and Outer's
+        # body is not visible, so ``Wrapper.Base`` is the module's.
+        models_py = (
+            "from django.db import models\n\n\n"
+            "class Wrapper:\n"
+            "    class Base(models.Model):\n"
+            "        name = models.CharField(max_length=10)\n\n"
+            "        class Meta:\n"
+            "            abstract = True\n\n\n"
+            "class Outer:\n"
+            "    class Wrapper:\n"
+            "        class Child(Wrapper.Base):\n"
+            "            class Meta:\n"
+            "                abstract = True\n\n\n"
+            "class Consumer(Outer.Wrapper.Child, models.Model):\n"
+            "    pass\n"
+        )
+        self.assertEqual(self.inherited(models_py), [("name", "Wrapper.Base")])
+
+
 if __name__ == "__main__":
     unittest.main()
