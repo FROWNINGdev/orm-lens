@@ -402,29 +402,25 @@ def _dotted_name(node: ast.AST) -> str | None:
 def _parse_call_args(args_block: str) -> tuple[list[ast.expr] | None, dict[str, ast.expr] | None]:
     """Parse a Django field's raw arg text via ``ast.parse``.
 
-    ``args_block`` is the content returned by :func:`_read_balanced_args` —
-    the substring between the opening ``(`` (already stripped) and the
-    balanced closing ``)`` (still trailing). Wraps as ``_(<content>)`` and
-    parses as an expression to extract positional args and keywords in a
-    kwarg-order-independent way.
+    ``args_block`` may include the field call's closing ``)``, as returned by
+    :func:`_read_balanced_args`, or have it removed by the caller. Wraps the
+    arguments as ``_(<content>)`` and parses them as an expression.
 
     Returns ``(posargs, kwargs)`` on success or ``(None, None)`` on
     :class:`SyntaxError`, so callers can fall back to the legacy regex path.
     """
     s = args_block.strip()
-    # _read_balanced_args returns content ending in exactly one balanced ")".
-    # Some call sites (e.g. line 331 `inner = args_block.rstrip(")")`) strip
-    # it. Normalise: drop up to two trailing ")" then re-close for parsing.
-    stripped_paren = False
-    while s.endswith(")") and not stripped_paren:
-        s = s[:-1].rstrip()
-        stripped_paren = True
-    if not s:
-        return [], {}
     try:
         tree = ast.parse(f"_({s})", mode="eval")
     except SyntaxError:
-        return None, None
+        # A final parenthesis can belong to a nested argument such as _('Name').
+        # Drop it only if the original argument list could not be parsed.
+        if not s.endswith(")"):
+            return None, None
+        try:
+            tree = ast.parse(f"_({s[:-1]})", mode="eval")
+        except SyntaxError:
+            return None, None
     call = tree.body
     if not isinstance(call, ast.Call):
         return None, None
