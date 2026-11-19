@@ -465,6 +465,107 @@ class DetectDriftTest(unittest.TestCase):
         self.assertEqual(report.blocking_count, 0)
         self.assertIn("no drift", format_drift(report))
 
+    def test_inheritance_parent_links_match_the_migrated_schema(self) -> None:
+        blog = self.root / "blog"
+        (blog / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Post(models.Model):\n"
+            "    title = models.CharField(max_length=100)\n\n"
+            "class PublishedPost(Post):\n"
+            "    summary = models.TextField()\n\n"
+            "class EditedPost(Post):\n"
+            "    parent = models.OneToOneField(Post, models.CASCADE, parent_link=True)\n\n"
+            "class AbstractPost(models.Model):\n"
+            "    notes = models.TextField()\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n"
+            "class LocalPost(AbstractPost):\n"
+            "    pass\n\n"
+            "class ProxyPost(Post):\n"
+            "    class Meta:\n"
+            "        proxy = True\n",
+            encoding="utf-8",
+        )
+        (blog / "migrations" / "0002_post_types.py").write_text(
+            _migration(
+                '        migrations.CreateModel(name="PublishedPost", fields=[\n'
+                '            ("post_ptr", models.OneToOneField(to="blog.post", parent_link=True)),\n'
+                '            ("summary", models.TextField()),\n'
+                '        ], bases=("blog.post",)),\n'
+                '        migrations.CreateModel(name="EditedPost", fields=[("parent", None)]),\n'
+                '        migrations.CreateModel(name="LocalPost", fields=[("notes", None)]),\n'
+                '        migrations.CreateModel(name="ProxyPost", fields=[], options={"proxy": True}),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(detect_drift(self.root).drifted, [])
+
+    def test_explicit_parent_link_leaves_other_concrete_parent_links_implicit(self) -> None:
+        accounts = self.root / "accounts"
+        accounts.mkdir()
+        (accounts / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Author(models.Model):\n"
+            "    name = models.CharField(max_length=100)\n",
+            encoding="utf-8",
+        )
+        blog = self.root / "blog"
+        (blog / "models.py").write_text(
+            "from django.db import models\n"
+            "from accounts.models import Author as Writer\n\n"
+            "class Post(models.Model):\n"
+            "    title = models.CharField(max_length=100)\n\n"
+            "class Byline(Post, Writer):\n"
+            "    post = models.OneToOneField('blog.Post', models.CASCADE, parent_link=True)\n",
+            encoding="utf-8",
+        )
+        (blog / "migrations" / "0002_byline.py").write_text(
+            _migration(
+                '        migrations.CreateModel(name="Byline", fields=[("post", None)]),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+
+        report = detect_drift(self.root)
+        self.assertEqual(
+            report.drifted,
+            [ModelDrift(app="blog", model="byline", missing_in_migrations=["author_ptr"])],
+        )
+
+    def test_inherited_explicit_parent_link_uses_its_declaration_file(self) -> None:
+        blog = self.root / "blog"
+        (blog / "abstract_models.py").write_text(
+            "from django.db import models\n\n"
+            "class Post(models.Model):\n"
+            "    title = models.CharField(max_length=100)\n\n"
+            "class ParentLink(models.Model):\n"
+            "    parent = models.OneToOneField(Post, models.CASCADE, parent_link=True)\n"
+            "    class Meta:\n"
+            "        abstract = True\n",
+            encoding="utf-8",
+        )
+        (blog / "models.py").write_text(
+            "from django.db import models\n"
+            "from .abstract_models import ParentLink, Post as Root\n\n"
+            "class PublishedPost(Root, ParentLink):\n"
+            "    summary = models.TextField()\n",
+            encoding="utf-8",
+        )
+        (blog / "migrations" / "0002_published.py").write_text(
+            _migration(
+                '        migrations.CreateModel(name="PublishedPost", fields=[\n'
+                '            ("parent", None), ("summary", None),\n'
+                '        ]),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(detect_drift(self.root).drifted, [])
+
     def test_directly_imported_array_field_matches_migration(self) -> None:
         blog = self.root / "blog"
         (blog / "models.py").write_text(

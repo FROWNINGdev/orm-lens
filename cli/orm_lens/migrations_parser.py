@@ -754,7 +754,9 @@ def _build_current_schema(project_root: str) -> dict[str, dict[str, set]]:
             # concrete child's table, so a migration that creates them is not
             # drift. Reported as #58 against django-guardian, where four such
             # fields read as "migrated but no longer declared".
-            app_map[model.name.lower()] = {f.name for f in model.all_fields()}
+            app_map[model.name.lower()] = (
+                {f.name for f in model.all_fields()} | model.implicit_parent_links
+            )
     return schema
 
 

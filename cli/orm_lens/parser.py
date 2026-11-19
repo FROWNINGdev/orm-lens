@@ -1057,6 +1057,7 @@ def _collect_defs(
                     args=inner.strip(),
                     is_relation=is_rel,
                     line_number=j,
+                    declaration_file=file_path,
                 )
                 if is_rel:
                     parsed_field.relation_kind = relation_kind  # type: ignore[assignment]
@@ -1880,6 +1881,60 @@ def iter_workspace_py_files(
                 yield Path(dirpath) / name
 
 
+def _attach_implicit_parent_links(
+    models: list[ParsedModel], resolver: _WorkspaceResolver
+) -> None:
+    """Find the columns Django adds for direct, resolved concrete parents."""
+    concrete = {
+        (resolver._resolved(Path(model.file_path)), model.name): model
+        for model in models
+        if model.meta.get("proxy", "").strip() not in ("True", "1", "true")
+    }
+    for model in concrete.values():
+        path = Path(model.file_path)
+        parents = {}
+        for base in model.base_classes:
+            parent = resolver.resolve(path, base)
+            if parent is None:
+                continue
+            key = resolver._resolved(Path(parent.file_path)), parent.name
+            if key in concrete and concrete[key] is not model:
+                parents[key] = concrete[key]
+        if not parents:
+            continue
+
+        for model_field in model.all_fields():
+            if model_field.relation_kind != "OneToOneField":
+                continue
+            try:
+                call = ast.parse(f"_({model_field.args})", mode="eval").body
+            except SyntaxError:
+                continue
+            if not isinstance(call, ast.Call):
+                continue
+            kwargs = {kw.arg: kw.value for kw in call.keywords}
+            flag = kwargs.get("parent_link")
+            if not isinstance(flag, ast.Constant) or flag.value is not True:
+                continue
+            target = kwargs.get("to", call.args[0] if call.args else None)
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                app, _, name = target.value.rpartition(".")
+                parents = {
+                    key: parent
+                    for key, parent in parents.items()
+                    if (parent.app_name.lower(), parent.name.lower())
+                    != ((app or model.app_name).lower(), name.lower())
+                }
+            elif target is not None:
+                name = _dotted_name(target)
+                declaration_path = Path(model_field.declaration_file or model.file_path)
+                related = resolver.resolve(declaration_path, name) if name else None
+                if related is not None:
+                    parents.pop((resolver._resolved(Path(related.file_path)), related.name), None)
+
+        model.implicit_parent_links = {f"{parent.name.lower()}_ptr" for parent in parents.values()}
+
+
 def scan_workspace(
     root: str,
     exclude_globs: Sequence[str] = DEFAULT_EXCLUDES,
@@ -1925,6 +1980,7 @@ def scan_workspace(
     )
 
     found = _resolve_and_filter(all_defs, resolver)
+    _attach_implicit_parent_links(found, resolver)
     # Finding SQLAlchemy models means reading every file, which a big Django
     # project should not pay for: look only when there are no Django models
     # or the project declares SQLAlchemy.

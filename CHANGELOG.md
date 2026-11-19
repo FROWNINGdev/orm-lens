@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fraction, an arithmetic or bitwise operator, another comparison, `is` or `in`
   is now left alone.
 
+- **Drift detection counts Django's implicit parent links for concrete inheritance**
+  ([#301](https://github.com/FROWNINGdev/orm-lens/issues/301)). A migrated
+  `post_ptr` column no longer looks undeclared when Django adds it to a child.
+
 - **parser: collect fields declared inside class-body conditional blocks**
   ([#253](https://github.com/FROWNINGdev/orm-lens/issues/253)).
   Fields declared across every branch of a complete class-body `if`/`elif`/`else`
