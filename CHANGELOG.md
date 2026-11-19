@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DOL006 no longer marks snapshot removal safe to apply**
+  ([#313](https://github.com/FROWNINGdev/orm-lens/issues/313)). The VS Code rule
+  skips dictionary views such as `cache.keys()` and offers a manual suggestion
+  for possible QuerySets.
+
 - **parser: resolve an abstract model nested inside another class as a base**
   ([#309](https://github.com/FROWNINGdev/orm-lens/issues/309)).
   Ralph's `class AssetHolder(NamedMixin.NonUnique, models.Model)` lost `name`,
