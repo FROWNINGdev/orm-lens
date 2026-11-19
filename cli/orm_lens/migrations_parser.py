@@ -1030,10 +1030,12 @@ class MigrationRiskAnalyzer:
         """Heuristic: anything after 0001_initial → assume the table has rows.
 
         Except a table this same migration created, anything in a squashed
-        migration, or a second ``initial = True`` migration — all of which
-        only ever run on a fresh database.
+        migration, or a second ``initial = True`` migration with no earlier
+        data operation — all of which only ever run on a fresh database. An
+        initial migration that runs a data operation first may populate the
+        table before the NOT NULL column arrives, so it is not exempt.
         """
-        if self.is_squashed or self.is_initial:
+        if self.is_squashed or (self.is_initial and not self.data_op_before):
             return False
         if isinstance(model, str) and model.lower() in self.created_models:
             return False

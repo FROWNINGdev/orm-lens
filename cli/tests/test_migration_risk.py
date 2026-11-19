@@ -901,6 +901,23 @@ class RealWorldPrecisionTest(unittest.TestCase):
             self._rules(self._add("models.CharField(max_length=50)")),
         )
 
+    def test_initial_migration_with_data_op_is_not_exempt(self) -> None:
+        # A second initial = True migration that runs a data operation first
+        # can populate the table before a NOT NULL column arrives. The fresh-
+        # database exemption must not hide that real IntegrityError risk.
+        add = self._add("models.CharField(max_length=50)")
+        flagged = self._rules(
+            "        migrations.RunPython(seed, migrations.RunPython.noop),\n" + add,
+            extra="    initial = True\n",
+        )
+        self.assertIn("add_field_not_null_no_default", flagged)
+        self.assertEqual(flagged["add_field_not_null_no_default"][0].severity, "warning")
+        # With no preceding data operation the initial migration stays exempt.
+        self.assertNotIn(
+            "add_field_not_null_no_default",
+            self._rules(add, extra="    initial = True\n"),
+        )
+
     def test_nullable_unique_column_fills_rows_with_null(self) -> None:
         for field in (
             "models.CharField(blank=True, max_length=12, null=True, unique=True)",
