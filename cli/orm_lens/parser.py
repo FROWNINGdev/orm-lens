@@ -1110,7 +1110,7 @@ def _collect_defs(
     return all_defs
 
 
-_NESTED_CLASS_RE = re.compile(r"^\s*class\s+(?!Meta\b)[A-Za-z_]")
+_NESTED_CLASS_RE = re.compile(r"^\s*class\s+(?!Meta\b)([A-Za-z_]\w*)")
 
 
 def _nested_abstract_defs(
@@ -1132,13 +1132,15 @@ def _nested_abstract_defs(
     nested ``TextChoices`` or concrete class adds nothing.
     """
     out: list[ParsedModel] = []
+    # Every nested class binds its name in the body, abstract model or not.
+    bound: list[tuple[int, str]] = []
     k = start
     while k < end:
-        if k in in_string or not (
-            _line_indent_width(lines[k]) == indent and _NESTED_CLASS_RE.match(lines[k])
-        ):
+        header = None if k in in_string else _NESTED_CLASS_RE.match(lines[k])
+        if not header or _line_indent_width(lines[k]) != indent:
             k += 1
             continue
+        bound.append((k, header.group(1)))
         header_end = _find_block_header_end(lines, k)
         stop = (header_end if header_end is not None else k) + 1
         while stop < end and (
@@ -1166,7 +1168,7 @@ def _nested_abstract_defs(
     # that sibling: the class body is the scope its bases are read in, and only
     # names bound before the class statement are in it.
     for d in out:
-        above = {o.name.split(".")[1] for o in out if o.line_number < d.line_number}
+        above = {name for line, name in bound if line < d.line_number}
         d.base_classes = [
             f"{outer}.{b}" if b.split(".")[0] in above else b for b in d.base_classes
         ]

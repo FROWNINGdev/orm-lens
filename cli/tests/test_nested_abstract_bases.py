@@ -205,6 +205,26 @@ class NestedBaseShapesTest(unittest.TestCase):
         )
         self.assertEqual(self.inherited(mixins), [("name", "NonUnique")])
 
+    def test_base_naming_a_sibling_that_is_not_a_model(self) -> None:
+        # The nested ``Common`` shadows the module's abstract ``Common``, and
+        # is no model, so NonUnique gives no fields.
+        mixins = (
+            "from django.db import models\n\n\n"
+            "class Common(models.Model):\n"
+            "    name = models.CharField(max_length=75)\n\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n\n"
+            "class NamedMixin(models.Model):\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n"
+            "    class Common(object):\n"
+            "        pass\n\n"
+            "    class NonUnique(Common, models.Model):\n"
+            "        class Meta:\n"
+            "            abstract = True\n"
+        )
+        self.assertEqual(self.inherited(mixins), [])
+
     def test_plain_object_base_is_not_a_model(self) -> None:
         mixins = nested_variant(
             "    class NonUnique(object):",
