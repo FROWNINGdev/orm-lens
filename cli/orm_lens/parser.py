@@ -893,7 +893,7 @@ def _collect_defs(
             NON_MODEL_TAIL.match(b.split(".")[-1]) for b in base_classes
         ):
             if non_model_names is not None:
-                non_model_names.add(model_name)
+                non_model_names.add(f"{scope}{model_name}")
             i += 1
             continue
 
@@ -1108,6 +1108,7 @@ def _collect_defs(
                 j,
                 indent,
                 f"{scope}{model_name}",
+                non_model_names,
             )
         )
         i = j
@@ -1127,6 +1128,7 @@ def _nested_abstract_defs(
     end: int,
     indent: int,
     outer: str,
+    non_model_names: set[str] | None = None,
 ) -> list[ParsedModel]:
     """Abstract models declared in a class body, named ``Outer.Inner`` (#309).
 
@@ -1134,7 +1136,9 @@ def _nested_abstract_defs(
     model: Django copies its fields onto any class that names
     ``NamedMixin.NonUnique`` as a base. The body loop skips nested classes, so
     each one is parsed on its own, dedented, and kept only when abstract; a
-    nested ``TextChoices`` or concrete class adds nothing.
+    nested ``TextChoices`` or concrete class adds nothing, and its dotted name
+    goes into *non_model_names* so a base naming it is not looked up by its
+    last part.
     """
     out: list[ParsedModel] = []
     direct: list[ParsedModel] = []
@@ -1162,7 +1166,11 @@ def _nested_abstract_defs(
         )
         # The block is parsed alone, so it gets the file's field-import aliases.
         for nested in _collect_defs(
-            file_path, block, field_aliases=field_aliases, scope=f"{outer}."
+            file_path,
+            block,
+            non_model_names,
+            field_aliases=field_aliases,
+            scope=f"{outer}.",
         ):
             if not _is_abstract(nested):
                 continue
@@ -1184,6 +1192,11 @@ def _nested_abstract_defs(
         d.base_classes = [
             f"{outer}.{b}" if b.split(".")[0] in above else b for b in d.base_classes
         ]
+    if non_model_names is not None:
+        kept = {d.name for d in out}
+        non_model_names.update(
+            f"{outer}.{name}" for _, name in bound if f"{outer}.{name}" not in kept
+        )
     return out
 
 
@@ -1781,6 +1794,8 @@ class _WorkspaceResolver:
             # in the module ``Outer`` is imported from.
             if base in defs:
                 return True, defs[base]
+            if base in non_models:
+                return True, None
             head = imports.get(qual[0])
             if head is None:
                 module = qual[0]

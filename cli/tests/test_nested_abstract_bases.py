@@ -234,7 +234,7 @@ class NestedBaseShapesTest(unittest.TestCase):
 
 
 class DeeperNestingTest(unittest.TestCase):
-    """An abstract model two class bodies down, ``Outer.Wrapper.Child``."""
+    """Nested bases resolved inside one scanned ``lib/models.py``."""
 
     def inherited(self, models_py: str) -> list[tuple[str, str | None]]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,6 +281,47 @@ class DeeperNestingTest(unittest.TestCase):
             "    pass\n"
         )
         self.assertEqual(self.inherited(models_py), [("name", "Wrapper.Base")])
+
+    def test_non_model_sibling_shadows_an_abstract_model_of_the_module(self) -> None:
+        # The module's abstract Common is scanned too, so it is a candidate by
+        # name; NonUnique's base is still the plain nested Common.
+        models_py = (
+            "from django.db import models\n\n\n"
+            "class Common(models.Model):\n"
+            "    name = models.CharField(max_length=75)\n\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n\n"
+            "class NamedMixin(models.Model):\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n"
+            "    class Common(object):\n"
+            "        pass\n\n"
+            "    class NonUnique(Common, models.Model):\n"
+            "        class Meta:\n"
+            "            abstract = True\n\n\n"
+            "class Consumer(NamedMixin.NonUnique, models.Model):\n"
+            "    pass\n"
+        )
+        self.assertEqual(self.inherited(models_py), [])
+
+    def test_non_model_sibling_two_bodies_down_shadows_it_too(self) -> None:
+        models_py = (
+            "from django.db import models\n\n\n"
+            "class Common(models.Model):\n"
+            "    name = models.CharField(max_length=75)\n\n"
+            "    class Meta:\n"
+            "        abstract = True\n\n\n"
+            "class Outer:\n"
+            "    class Wrapper:\n"
+            "        class Common(object):\n"
+            "            pass\n\n"
+            "        class Child(Common, models.Model):\n"
+            "            class Meta:\n"
+            "                abstract = True\n\n\n"
+            "class Consumer(Outer.Wrapper.Child, models.Model):\n"
+            "    pass\n"
+        )
+        self.assertEqual(self.inherited(models_py), [])
 
 
 if __name__ == "__main__":
