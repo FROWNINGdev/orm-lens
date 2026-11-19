@@ -2044,11 +2044,37 @@ def _attach_implicit_parent_links(
     models: list[ParsedModel], resolver: _WorkspaceResolver
 ) -> None:
     """Find the columns Django adds for direct, resolved concrete parents."""
-    concrete = {
-        (resolver._resolved(Path(model.file_path)), model.name): model
-        for model in models
-        if model.meta.get("proxy", "").strip() not in ("True", "1", "true")
-    }
+
+    def model_key(model: ParsedModel) -> tuple[Path, str]:
+        return resolver._resolved(Path(model.file_path)), model.name
+
+    concrete: dict[tuple[Path, str], ParsedModel] = {}
+    proxies: dict[tuple[Path, str], ParsedModel] = {}
+    for model in models:
+        if model.meta.get("proxy", "").strip() in ("True", "1", "true"):
+            proxies[model_key(model)] = model
+        else:
+            concrete[model_key(model)] = model
+
+    def concrete_key(parent: ParsedModel) -> tuple[Path, str] | None:
+        pending = [model_key(parent)]
+        visited: set[tuple[Path, str]] = set()
+        resolved: set[tuple[Path, str]] = set()
+        while pending:
+            key = pending.pop()
+            if key in visited:
+                continue
+            visited.add(key)
+            if key in concrete:
+                resolved.add(key)
+            elif key in proxies:
+                proxy = proxies[key]
+                for base in proxy.base_classes:
+                    ancestor = resolver.resolve(Path(proxy.file_path), base)
+                    if ancestor is not None:
+                        pending.append(model_key(ancestor))
+        return next(iter(resolved)) if len(resolved) == 1 else None
+
     for model in concrete.values():
         path = Path(model.file_path)
         parents = {}
@@ -2056,8 +2082,8 @@ def _attach_implicit_parent_links(
             parent = resolver.resolve(path, base)
             if parent is None:
                 continue
-            key = resolver._resolved(Path(parent.file_path)), parent.name
-            if key in concrete and concrete[key] is not model:
+            key = concrete_key(parent)
+            if key is not None and concrete[key] is not model:
                 parents[key] = concrete[key]
         if not parents:
             continue
@@ -2089,7 +2115,7 @@ def _attach_implicit_parent_links(
                 declaration_path = Path(model_field.declaration_file or model.file_path)
                 related = resolver.resolve(declaration_path, target_name) if target_name else None
                 if related is not None:
-                    parents.pop((resolver._resolved(Path(related.file_path)), related.name), None)
+                    parents.pop(model_key(related), None)
 
         model.implicit_parent_links = {f"{parent.name.lower()}_ptr" for parent in parents.values()}
 

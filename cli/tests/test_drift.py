@@ -579,7 +579,12 @@ class DetectDriftTest(unittest.TestCase):
             "    pass\n\n"
             "class ProxyPost(Post):\n"
             "    class Meta:\n"
-            "        proxy = True\n",
+            "        proxy = True\n\n"
+            "class NestedProxyPost(ProxyPost):\n"
+            "    class Meta:\n"
+            "        proxy = True\n\n"
+            "class FeaturedPost(NestedProxyPost):\n"
+            "    pass\n",
             encoding="utf-8",
         )
         (blog / "migrations" / "0002_post_types.py").write_text(
@@ -590,7 +595,11 @@ class DetectDriftTest(unittest.TestCase):
                 '        ], bases=("blog.post",)),\n'
                 '        migrations.CreateModel(name="EditedPost", fields=[("parent", None)]),\n'
                 '        migrations.CreateModel(name="LocalPost", fields=[("notes", None)]),\n'
-                '        migrations.CreateModel(name="ProxyPost", fields=[], options={"proxy": True}),\n',
+                '        migrations.CreateModel(name="ProxyPost", fields=[], options={"proxy": True}),\n'
+                '        migrations.CreateModel(name="NestedProxyPost", fields=[], options={"proxy": True}),\n'
+                '        migrations.CreateModel(name="FeaturedPost", fields=[\n'
+                '            ("post_ptr", models.OneToOneField(to="blog.post", parent_link=True)),\n'
+                '        ], bases=("blog.nestedproxypost",)),\n',
                 '[("blog", "0001_initial")]',
             ),
             encoding="utf-8",
