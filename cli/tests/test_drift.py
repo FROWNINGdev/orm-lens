@@ -301,6 +301,37 @@ class ReplayTest(unittest.TestCase):
         self._write("0002_x.py", '        migrations.DeleteModel(name="Post"),\n')
         self.assertEqual(replay_app(self.migrations)[0], {})
 
+    # --- positional arguments (#303) --------------------------------------
+    # `makemigrations` writes keywords, but hand-written migrations pass the
+    # same values positionally. Django binds them by signature, so the replay
+    # has to as well or whole operations silently vanish and read as drift.
+
+    def test_positional_operation_arguments(self) -> None:
+        self._write(
+            "0001_initial.py",
+            "        migrations.CreateModel(\n"
+            '            "Post", [("id", None), ("title", None), ("legacy", None)],\n'
+            "        ),\n",
+        )
+        self._write(
+            "0002_x.py",
+            '        migrations.AddField("post", "slug", models.CharField(max_length=1)),\n'
+            '        migrations.RemoveField("post", "legacy"),\n'
+            '        migrations.RenameField("post", "title", "headline"),\n',
+        )
+        state, _ = replay_app(self.migrations)
+        self.assertEqual(state, {"post": {"slug", "headline"}})
+
+    def test_positional_delete_and_rename_model(self) -> None:
+        self._write(
+            "0001_initial.py",
+            '        migrations.CreateModel("Post", [("title", None)]),\n',
+        )
+        self._write("0002_x.py", '        migrations.RenameModel("Post", "Article"),\n')
+        self.assertEqual(replay_app(self.migrations)[0], {"article": {"title"}})
+        self._write("0003_x.py", '        migrations.DeleteModel("Article"),\n')
+        self.assertEqual(replay_app(self.migrations)[0], {})
+
     def test_alter_field_changes_nothing_structural(self) -> None:
         self._write(
             "0001_initial.py",
@@ -457,6 +488,28 @@ class DetectDriftTest(unittest.TestCase):
                 "audit": {"entry": {"id", "action", "message"}},
             }
         )
+        self.assertEqual(report.drifted, [])
+
+    def test_positional_delete_and_remove_field_report_no_drift(self) -> None:
+        # Issue #303: the models were moved to another app by hand-written
+        # migrations using positional arguments. A dropped DeleteModel leaves
+        # the stale model in the replayed state, and a dropped RemoveField
+        # leaves its field behind — two false "migrated but undeclared" rows.
+        move = self.root / "blog" / "migrations" / "0002_move.py"
+        move.write_text(
+            _migration(
+                "        migrations.SeparateDatabaseAndState(\n"
+                "            database_operations=[],\n"
+                "            state_operations=[\n"
+                '                migrations.DeleteModel("Network"),\n'
+                "            ],\n"
+                "        ),\n"
+                '        migrations.RemoveField("post", "title"),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+        report = self._detect({"blog": {"post": set()}})
         self.assertEqual(report.drifted, [])
 
     def test_matching_schema_reports_no_drift(self) -> None:
