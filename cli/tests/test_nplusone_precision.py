@@ -11,6 +11,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from orm_lens.cli import main
 from orm_lens.parser import scan_workspace
 from orm_lens.query_analyzer import scan_for_nplusone
@@ -21,6 +23,85 @@ SCHEMA = {
     "Profile": {"user": "o2o", "email": "scalar"},
     "User": {"email": "scalar"},
 }
+
+
+def test_dict_values_do_not_look_like_querysets(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "formats.py",
+        "def build(tracks_by_id, methods):\n"
+        "    for track in tracks_by_id.values():\n"
+        "        track.shapes.sort(key=lambda shape: shape.frame)\n"
+        "        first = track.shapes[0]\n"
+        "    for meta in methods.values():\n"
+        "        for transition in meta.transitions.values():\n"
+        "            print(transition.target)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), {"Track": {"shapes": "reverse"}}) == []
+
+
+@pytest.mark.parametrize(
+    "setup, source, access",
+    [
+        ("", 'Post.objects.values("id", "author")', 'row["author"]'),
+        ("", 'Post.objects.values(author_pk=F("author_id"))', 'row["author_pk"]'),
+        ("", 'Post.objects.values_list("author", named=True)', "row.author.real"),
+        ("", 'Post.objects.filter(active=True).values_list("author", named=True).iterator()', "row.author.real"),
+        ('rows = Post.objects.values_list("author", named=True).order_by("author")\n', "rows", "row.author.real"),
+        ('rows = Post.objects.values_list("author", named=True)\n', 'rows[:10].order_by("author")', "row.author.real"),
+        (
+            'rows = Post.objects.values_list("author", named=True)\n'
+            'alias = rows\n'
+            'ordered: QuerySet = alias.order_by("author")\n',
+            "ordered",
+            "row.author.real",
+        ),
+        (
+            'def rows(qs):\n    return qs.values_list("author", named=True)\n',
+            "rows(Post.objects.all()).iterator()",
+            "row.author.real",
+        ),
+    ],
+)
+def test_projected_queryset_rows_do_not_load_relations(
+    tmp_path: Path, setup: str, source: str, access: str,
+) -> None:
+    _write(tmp_path / "views.py", f"{setup}for row in {source}:\n    print({access})\n")
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
+
+
+def test_projection_does_not_hide_queries_on_outer_loop_models(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "rows = Post.objects.filter(author_id__in=Author.objects.values_list('id', flat=True))\n"
+        "for post in rows.order_by('id'):\n"
+        "    print(post.author.name)\n"
+        "rows = rows.values_list('author', named=True)\n"
+        "for row in rows:\n"
+        "    print(row.author.real)\n"
+        "for post in Post.objects.prefetch_related('tags'):\n"
+        "    print(list(post.tags.values('id')))\n"
+        "for post in Post.objects.prefetch_related('tags'):\n"
+        "    for row in post.tags.values_list('id', named=True):\n"
+        "        print(row.id.real)\n",
+    )
+    findings = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert [(f.loop_var, f.suggested_fix) for f in findings] == [
+        ("post", '.select_related("author")'),
+        ("post", '.prefetch_related("tags")'),
+        ("post", '.prefetch_related("tags")'),
+    ]
+
+
+def test_projected_binding_does_not_shadow_function_parameter(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "rows = Post.objects.values_list('author', named=True)\n"
+        "def render(rows):\n"
+        "    for post in rows.order_by('id'):\n"
+        "        print(post.author.name)\n",
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert finding.suggested_fix == '.select_related("author")'
 
 
 def test_related_manager_writes_are_not_reads(tmp_path: Path) -> None:
