@@ -867,6 +867,10 @@ class MigrationRiskAnalyzer:
         # database. Where the replaced migrations are applied, Django marks it
         # applied without running it, so it never touches populated tables.
         self.is_squashed = False
+        # A second ``initial = True`` migration (makemigrations splits cross-app
+        # FKs into one) also only ever runs on a fresh database, so treat it
+        # like a squash for population purposes.
+        self.is_initial = False
         # (line, model, field-or-None) for every operation that brings a field
         # or a whole model (back) into existence. A RemoveField followed by an
         # AddField or a RenameField onto the same name, or a DeleteModel
@@ -906,11 +910,14 @@ class MigrationRiskAnalyzer:
             if not isinstance(node, ast.ClassDef) or node.name != "Migration":
                 continue
             assigns = [stmt for stmt in node.body if isinstance(stmt, ast.Assign)]
-            # `replaces` can sit before or after `operations`; read it first.
+            # `replaces` and `initial` can sit before or after `operations`;
+            # read them first.
             for stmt in assigns:
                 targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
                 if "replaces" in targets and isinstance(stmt.value, (ast.List, ast.Tuple)):
                     self.is_squashed = bool(stmt.value.elts)
+                if "initial" in targets and isinstance(stmt.value, ast.Constant):
+                    self.is_initial = stmt.value.value is True
             for stmt in assigns:
                 targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
                 if "operations" not in targets:
@@ -1022,10 +1029,11 @@ class MigrationRiskAnalyzer:
     def _table_likely_non_empty(self, model: Any = None) -> bool:
         """Heuristic: anything after 0001_initial → assume the table has rows.
 
-        Except a table this same migration created, and anything in a
-        squashed migration, which only runs on a fresh database.
+        Except a table this same migration created, anything in a squashed
+        migration, or a second ``initial = True`` migration — all of which
+        only ever run on a fresh database.
         """
-        if self.is_squashed:
+        if self.is_squashed or self.is_initial:
             return False
         if isinstance(model, str) and model.lower() in self.created_models:
             return False

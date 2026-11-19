@@ -885,6 +885,22 @@ class RealWorldPrecisionTest(unittest.TestCase):
         )
         self.assertNotIn("add_field_not_null_no_default", rules)
 
+    def test_second_initial_migration_only_runs_on_a_fresh_database(self) -> None:
+        # makemigrations splits cross-app FKs into a second migration that is
+        # also marked initial = True. Like a squashed migration it only ever
+        # runs on a fresh database (or is faked with --fake-initial), so a NOT
+        # NULL FK there must not be flagged as hitting populated rows.
+        rules = self._rules(
+            self._add("models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='orders.order')"),
+            extra="    initial = True\n",
+        )
+        self.assertNotIn("add_field_not_null_no_default", rules)
+        # Without the flag the same field on a later migration still flags.
+        self.assertIn(
+            "add_field_not_null_no_default",
+            self._rules(self._add("models.CharField(max_length=50)")),
+        )
+
     def test_nullable_unique_column_fills_rows_with_null(self) -> None:
         for field in (
             "models.CharField(blank=True, max_length=12, null=True, unique=True)",
