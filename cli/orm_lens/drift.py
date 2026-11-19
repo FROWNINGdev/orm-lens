@@ -136,6 +136,53 @@ def _op_name(call: ast.Call) -> str | None:
     return None
 
 
+def _overrides_operation_state(node: ast.ClassDef) -> bool:
+    names = {"__init__", "state_forwards"}
+    for stmt in node.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name in names:
+            return True
+        if isinstance(stmt, ast.Assign):
+            targets = stmt.targets
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets = [stmt.target]
+        else:
+            continue
+        if any(
+            isinstance(part, ast.Name) and isinstance(part.ctx, ast.Store) and part.id in names
+            for target in targets
+            for part in ast.walk(target)
+        ):
+            return True
+    return False
+
+
+def _local_structural_ops(tree: ast.Module) -> dict[str, str | None]:
+    """Recognize simple local subclasses of structural migration operations."""
+    resolved: dict[str, str | None] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        operation = None
+        if (
+            len(node.bases) == 1
+            and not node.decorator_list
+            and not node.keywords
+            and not _overrides_operation_state(node)
+        ):
+            base = node.bases[0]
+            if isinstance(base, ast.Name):
+                operation = resolved.get(base.id, base.id if base.id in _STRUCTURAL_OPS else None)
+            elif (
+                isinstance(base, ast.Attribute)
+                and isinstance(base.value, ast.Name)
+                and base.value.id == "migrations"
+                and base.attr in _STRUCTURAL_OPS
+            ):
+                operation = base.attr
+        resolved[node.name] = operation
+    return resolved
+
+
 def _kwarg(call: ast.Call, name: str) -> Any:
     for kw in call.keywords:
         if kw.arg == name:
@@ -365,8 +412,11 @@ def replay_app(migrations_dir: Path) -> tuple[dict[str, set[str]], int]:
     # `AppConfig.label` overrides it; `_replay_order` checks the dependency
     # tuples before trusting it.
     for _path, tree in _replay_order(parsed, app_label=migrations_dir.parent.name):
+        local_ops = _local_structural_ops(tree)
         for call in _operations(tree):
             op = _op_name(call)
+            if isinstance(call.func, ast.Name):
+                op = local_ops.get(call.func.id, op)
             if op in _STRUCTURAL_OPS:
                 _apply(state, op, call)
     return state, replayed

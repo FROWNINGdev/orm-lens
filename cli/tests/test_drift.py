@@ -88,6 +88,48 @@ class ReplayTest(unittest.TestCase):
         state, _ = replay_app(self.migrations)
         self.assertEqual(state, {"post": {"headline"}})
 
+    def test_drift_replays_local_structural_operation_subclasses(self) -> None:
+        self._write(
+            "0001_initial.py",
+            '        migrations.CreateModel(name="Post", fields=[("title", None)]),\n',
+        )
+        (self.migrations / "0002_custom.py").write_text(
+            HEADER
+            + "class AddFieldWithDefault(migrations.AddField):\n"
+            + "    def database_forwards(self, *args):\n"
+            + "        pass\n\n"
+            + "class RemoveFieldOrSkip(migrations.RemoveField):\n"
+            + "    pass\n\n"
+            + "class RemoveTitle(RemoveFieldOrSkip):\n"
+            + "    pass\n\n"
+            + "class Unrelated:\n"
+            + "    pass\n\n"
+            + "class CustomState(migrations.AddField):\n"
+            + "    def state_forwards(self, app_label, state):\n"
+            + "        pass\n\n"
+            + "class AssignedState(migrations.AddField):\n"
+            + "    state_forwards = lambda self, app_label, state: None\n\n"
+            + "class InheritedAssignedState(AssignedState):\n"
+            + "    pass\n\n"
+            + "class AnnotatedState(migrations.AddField):\n"
+            + "    state_forwards: object = lambda self, app_label, state: None\n\n"
+            + "class Migration(migrations.Migration):\n"
+            + '    dependencies = [("blog", "0001_initial")]\n'
+            + "    operations = [\n"
+            + '        AddFieldWithDefault(model_name="post", name="slug", field=None),\n'
+            + '        RemoveTitle(model_name="post", name="title"),\n'
+            + '        Unrelated(model_name="post", name="ignored"),\n'
+            + '        CustomState(model_name="post", name="ignored", field=None),\n'
+            + '        InheritedAssignedState(model_name="post", name="assigned", field=None),\n'
+            + '        AnnotatedState(model_name="post", name="annotated", field=None),\n'
+            + "    ]\n",
+            encoding="utf-8",
+        )
+
+        report = detect_drift(self.root, declared={"blog": {"post": {"slug"}}})
+        self.assertEqual(report.migrations_replayed, 2)
+        self.assertEqual(report.drifted, [])
+
     def test_rename_model_carries_the_fields(self) -> None:
         self._write(
             "0001_initial.py",
