@@ -465,6 +465,30 @@ class DetectDriftTest(unittest.TestCase):
         self.assertEqual(report.blocking_count, 0)
         self.assertIn("no drift", format_drift(report))
 
+    def test_mptt_generated_tree_fields_do_not_report_drift(self) -> None:
+        blog = self.root / "blog"
+        (blog / "models.py").write_text(
+            "from django.db import models\n"
+            "from mptt.models import MPTTModel\n\n"
+            "class Post(MPTTModel):\n"
+            "    title = models.CharField(max_length=100)\n",
+            encoding="utf-8",
+        )
+        (blog / "migrations" / "0001_initial.py").write_text(
+            _migration(
+                '        migrations.CreateModel(name="Post", fields=[\n'
+                '            ("id", None), ("title", None),\n'
+                '            ("lft", models.PositiveIntegerField(editable=False)),\n'
+                '            ("rght", models.PositiveIntegerField(editable=False)),\n'
+                '            ("tree_id", models.PositiveIntegerField(editable=False, db_index=True)),\n'
+                '            ("level", models.PositiveIntegerField(editable=False)),\n'
+                "        ]),\n"
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(detect_drift(self.root).drifted, [])
+
     def test_directly_imported_array_field_matches_migration(self) -> None:
         blog = self.root / "blog"
         (blog / "models.py").write_text(
