@@ -189,6 +189,59 @@ def test_projection_on_only_continuing_branch_is_suppressed(tmp_path: Path) -> N
     assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
 
 
+def test_helper_returns_use_the_binding_at_each_return(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        dedent("""
+            def model_rows(active):
+                rows = Post.objects.values_list("author", named=True)
+                if active:
+                    rows = Post.objects.all()
+                    return rows
+                return []
+
+            def projected_rows(active):
+                rows = Post.objects.all()
+                if active:
+                    rows = Post.objects.values_list("author", named=True)
+                    return rows
+                return []
+
+            for post in model_rows(True):
+                print(post.author.name)
+            for row in projected_rows(True):
+                print(row.author.real)
+        """),
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert (finding.loop_var, finding.suggested_fix) == ("post", '.select_related("author")')
+
+
+def test_nested_loop_checks_later_model_binding_in_enclosing_scope(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        dedent("""
+            def render():
+                rows = Post.objects.values_list("author", named=True)
+                def consume():
+                    for post in rows:
+                        print(post.author.name)
+                rows = Post.objects.all()
+                consume()
+                rows = rows.values_list("author", named=True)
+
+            def stable():
+                rows = Post.objects.values_list("author", named=True)
+                def consume():
+                    for row in rows:
+                        print(row.author.real)
+                consume()
+        """),
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert (finding.loop_var, finding.suggested_fix) == ("post", '.select_related("author")')
+
+
 def test_related_manager_writes_are_not_reads(tmp_path: Path) -> None:
     # NetBox: `interface.vdcs.set(vdcs)` used to be suggested a prefetch.
     _write(
