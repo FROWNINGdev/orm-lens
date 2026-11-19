@@ -25,6 +25,7 @@ from orm_lens.drift import (
     format_drift,
     replay_app,
 )
+from tests.test_nested_abstract_bases import write_project
 
 HEADER = "from django.db import migrations, models\n\n\n"
 
@@ -644,6 +645,44 @@ class SameAppNameTwiceTest(unittest.TestCase):
             self.assertEqual(
                 payload["drifted"][0]["missingInMigrations"], ["never_migrated"]
             )
+
+
+class NestedAbstractBaseDriftTest(unittest.TestCase):
+    """#309: a field from ``NamedMixin.NonUnique`` is declared, not drift."""
+
+    def test_nested_abstract_base_gives_no_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_project(root)
+            for app, models_ in {
+                "assets": [
+                    ("AssetHolder", "models.CharField(max_length=75, db_index=True)"),
+                    ("Manufacturer", "models.CharField(max_length=255, unique=True)"),
+                ],
+                "places": [("Spot", "models.CharField(max_length=20)")],
+            }.items():
+                field = "label" if app == "places" else "name"
+                extra = (
+                    '            ("code", models.CharField(max_length=4)),\n'
+                    if app == "places"
+                    else ""
+                )
+                (root / app / "migrations").mkdir()
+                (root / app / "migrations" / "__init__.py").write_text("", encoding="utf-8")
+                body = "".join(
+                    f'        migrations.CreateModel(name="{model}", fields=[\n'
+                    '            ("id", models.AutoField(primary_key=True)),\n'
+                    f'            ("{field}", {declared}),\n'
+                    f"{extra}"
+                    "        ]),\n"
+                    for model, declared in models_
+                )
+                (root / app / "migrations" / "0001_initial.py").write_text(
+                    _migration(body), encoding="utf-8"
+                )
+
+            payload = detect_drift(str(root)).to_dict()
+            self.assertEqual(payload["drifted"], [])
 
 
 class BlockingPolicyTest(unittest.TestCase):

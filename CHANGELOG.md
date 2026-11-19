@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **parser: resolve an abstract model nested inside another class as a base**
+  ([#309](https://github.com/FROWNINGdev/orm-lens/issues/309)).
+  Ralph's `class AssetHolder(NamedMixin.NonUnique, models.Model)` lost `name`,
+  so `drift` reported it as migrated but no longer declared. An abstract model
+  nested in a class body is now collected as `Outer.Inner`, and a dotted base
+  resolves to it in the same module or in the module `Outer` is imported from.
+  A base spelled `object` no longer counts as an unknown model base, so an
+  abstract `class X(object)` passes no fields, as in Django.
+  Python parser only (`src/parser.ts` not updated).
+
 - **VS Code rules DOL001-DOL004 skip a match that is an operand of an operator**
   ([#293](https://github.com/FROWNINGdev/orm-lens/issues/293)).
   In `if event.capacity - event.registrations.count() > 0:` Python tests the
