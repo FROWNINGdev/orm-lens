@@ -1012,7 +1012,7 @@ class MigrationRiskAnalyzer:
             self.introduced.append((line, model.lower(), name if isinstance(name, str) else None))
 
     def _sql_changes_rows(self, call: ast.Call) -> bool:
-        """RunSQL whose forward SQL deletes, truncates or updates rows."""
+        """RunSQL whose forward SQL inserts, deletes, truncates or updates rows."""
         node = _get_kwarg(call, "sql") or (call.args[0] if call.args else None)
         parts = node.elts if isinstance(node, (ast.List, ast.Tuple)) else [node]
         for part in parts:
@@ -1022,7 +1022,7 @@ class MigrationRiskAnalyzer:
                 sql = self.module_strings.get(part.id, "")
             else:
                 continue
-            if re.search(r"\b(DELETE|TRUNCATE|UPDATE)\b", sql, re.I):
+            if re.search(r"\b(INSERT|DELETE|TRUNCATE|UPDATE)\b", sql, re.I):
                 return True
         return False
 
@@ -1033,11 +1033,17 @@ class MigrationRiskAnalyzer:
         migration, or a second ``initial = True`` migration with no earlier
         data operation — all of which only ever run on a fresh database. An
         initial migration that runs a data operation first may populate the
-        table before the NOT NULL column arrives, so it is not exempt.
+        table before the NOT NULL column arrives, so it is not exempt. Nor is
+        a table created in this migration still empty once a data operation
+        has run against it.
         """
         if self.is_squashed or (self.is_initial and not self.data_op_before):
             return False
-        if isinstance(model, str) and model.lower() in self.created_models:
+        if (
+            isinstance(model, str)
+            and model.lower() in self.created_models
+            and not self.data_op_before
+        ):
             return False
         return self.migration_index > 0
 

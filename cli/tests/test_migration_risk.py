@@ -918,6 +918,41 @@ class RealWorldPrecisionTest(unittest.TestCase):
             self._rules(add, extra="    initial = True\n"),
         )
 
+    def test_created_model_not_exempt_after_data_op(self) -> None:
+        # makemigrations can create a model and split its NOT NULL field into
+        # an AddField in the same migration; a just-created model is still
+        # empty. Once a data operation inserts rows, that creation-based
+        # exemption must no longer hide a later NOT NULL AddField.
+        create = "        migrations.CreateModel(name='Line', fields=[]),\n"
+        run = "        migrations.RunPython(seed, migrations.RunPython.noop),\n"
+        line_add = (
+            "        migrations.AddField(model_name='line', name='x', "
+            "field=models.CharField(max_length=50)),\n"
+        )
+        self.assertIn("add_field_not_null_no_default", self._rules(create + run + line_add))
+        # With no intervening data operation a just-created model stays exempt.
+        self.assertNotIn(
+            "add_field_not_null_no_default",
+            self._rules(create + line_add),
+        )
+
+    def test_run_sql_insert_counts_as_data_op_in_initial_migration(self) -> None:
+        # An INSERT in an initial migration populates the table just as a
+        # RunPython does, so a later NOT NULL field without a default is a real
+        # risk and must not be suppressed by the fresh-database exemption.
+        add = self._add("models.CharField(max_length=50)")
+        insert = (
+            "        migrations.RunSQL("
+            "'INSERT INTO orders_order (id) VALUES (1)', "
+            "migrations.RunSQL.noop),\n"
+        )
+        self.assertIn("add_field_not_null_no_default", self._rules(insert + add, extra="    initial = True\n"))
+        # With no preceding data operation the initial migration stays exempt.
+        self.assertNotIn(
+            "add_field_not_null_no_default",
+            self._rules(add, extra="    initial = True\n"),
+        )
+
     def test_nullable_unique_column_fills_rows_with_null(self) -> None:
         for field in (
             "models.CharField(blank=True, max_length=12, null=True, unique=True)",
