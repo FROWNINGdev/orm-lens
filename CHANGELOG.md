@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DOL006 no longer marks snapshot removal safe to apply**
+  ([#313](https://github.com/FROWNINGdev/orm-lens/issues/313)). The VS Code rule
+  skips dictionary views such as `cache.keys()` and offers a manual suggestion
+  for possible QuerySets.
+
 - **VS Code rules DOL001-DOL004 skip a match that is an operand of an operator**
   ([#293](https://github.com/FROWNINGdev/orm-lens/issues/293)).
   In `if event.capacity - event.registrations.count() > 0:` Python tests the
