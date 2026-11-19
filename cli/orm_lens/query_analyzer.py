@@ -1047,13 +1047,38 @@ def _chain_source_method(chain: list[tuple[str, ast.Call]]) -> str | None:
     return chain[0][0]
 
 
+def _projects_rows(chain: list[tuple[str, ast.Call]]) -> bool:
+    return any(method in _PROJECTION_METHODS for method, _ in chain)
+
+
+def _assignment_values(
+    target: ast.expr, value: ast.expr | None,
+) -> Iterable[tuple[str, ast.expr | None]]:
+    """Pair assigned names with their values when unpacking is statically known."""
+    if isinstance(target, ast.Name):
+        yield target.id, value
+    elif isinstance(target, ast.Starred):
+        yield from _assignment_values(target.value, None)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+            and not any(isinstance(item, ast.Starred) for item in (*target.elts, *value.elts))
+        ):
+            for item, item_value in zip(target.elts, value.elts):
+                yield from _assignment_values(item, item_value)
+        else:
+            for item in target.elts:
+                yield from _assignment_values(item, None)
+
+
 class _QuerySetTracker(ast.NodeVisitor):
     """Collects assignments of the form ``qs = <Model>.objects.<chain>``
     within a single AST. Later loops that iterate ``qs`` are cross-checked
     against the captured chain to see if it already has select/prefetch.
 
-    Only the most recent binding in source order is kept. Assignments inside
-    nested scopes are tracked separately by the scanner.
+    Bindings follow source order and account for branches of an if statement.
+    Assignments inside nested scopes are tracked separately by the scanner.
     """
 
     def __init__(self) -> None:
@@ -1069,20 +1094,23 @@ class _QuerySetTracker(ast.NodeVisitor):
             receiver = func.value
         while isinstance(receiver, ast.Subscript) and isinstance(receiver.slice, ast.Slice):
             receiver = receiver.value
-        # Keep a known projection through aliases, slices, and queryset chaining.
+        # Aliases and slices preserve model bindings. A projected receiver also
+        # stays projected through queryset chaining.
         if isinstance(receiver, ast.Name):
             binding = self.bindings.get(receiver.id)
-            if binding is not None and any(
-                method in _PROJECTION_METHODS for method, _ in binding[0]
-            ):
+            if binding is not None and (not chain or _projects_rows(binding[0])):
                 return binding[0]
         return chain
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        chain = self.chain_for(node.value)
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                self._bind(target.id, chain)
+        # Resolve each right-hand side before rebinding any target, e.g. a, b = b, a.
+        assignments = [
+            (name, self.chain_for(value) if value is not None else [])
+            for target in node.targets
+            for name, value in _assignment_values(target, node.value)
+        ]
+        for name, chain in assignments:
+            self._bind(name, chain)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if node.value is not None and isinstance(node.target, ast.Name):
@@ -1093,6 +1121,49 @@ class _QuerySetTracker(ast.NodeVisitor):
             self.bindings[name] = (chain, _chain_model_root(chain))
         else:
             self.bindings.pop(name, None)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.walk_if(node, self)
+
+    def walk_if(self, node: ast.If, visitor: ast.NodeVisitor) -> bool:
+        """Visit each branch and keep only the bindings that can reach the join."""
+        visitor.visit(node.test)
+        before = self.bindings
+        continuing = []
+        for branch in (node.body, node.orelse):
+            self.bindings = before.copy()
+            for stmt in branch:
+                if isinstance(stmt, ast.If):
+                    if not self.walk_if(stmt, visitor):
+                        break
+                else:
+                    visitor.visit(stmt)
+                    if isinstance(stmt, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                        break
+            else:
+                continuing.append(self.bindings)
+        if not continuing:
+            self.bindings = before
+            return False
+        self.bindings = continuing[0]
+        if len(continuing) == 2:
+            left, right = continuing
+            self.bindings = {}
+            for name in left.keys() | right.keys():
+                first, second = left.get(name), right.get(name)
+                # Suppress the loop only when both continuing paths project.
+                if second is not None and _projects_rows(second[0]):
+                    binding = first
+                elif (
+                    (first is not None and _projects_rows(first[0]))
+                    or (second is not None and (second != before.get(name) or first is None))
+                ):
+                    binding = second
+                else:
+                    binding = first
+                if binding is not None:
+                    self.bindings[name] = binding
+        return True
 
     # A prepass for global bindings and helper returns stays in its own scope.
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -1320,6 +1391,9 @@ class NPlusOneScanner(ast.NodeVisitor):
         self._tracker.visit_AnnAssign(node)
         self.generic_visit(node)
 
+    def visit_If(self, node: ast.If) -> None:
+        self._tracker.walk_if(node, self)
+
     def visit_For(self, node: ast.For) -> None:
         self._loops.append((node, None, set()))
         try:
@@ -1398,7 +1472,7 @@ class NPlusOneScanner(ast.NodeVisitor):
             return
 
         # dict.values() and projected QuerySets don't yield Django model instances.
-        if any(method in _PROJECTION_METHODS for method, _ in chain):
+        if _projects_rows(chain):
             return
 
         source_method = _chain_source_method(chain)

@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -102,6 +103,90 @@ def test_projected_binding_does_not_shadow_function_parameter(tmp_path: Path) ->
     )
     (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
     assert finding.suggested_fix == '.select_related("author")'
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        """
+        rows = Post.objects.all()
+        rows = rows[:10]
+        """,
+        """
+        source = Post.objects.all()
+        rows = source[:10]
+        """,
+        """
+        rows = Post.objects.values_list("author", named=True)
+        rows, marker = (Post.objects.all(), None)
+        """,
+        """
+        rows = Post.objects.all()
+        if projected:
+            rows = rows.values_list("author", named=True)
+            return list(rows)
+        """,
+        """
+        rows = Post.objects.all()
+        if projected:
+            rows = rows.values_list("author", named=True)
+        """,
+    ],
+    ids=["in-place-slice", "slice-alias", "unpack", "returning-branch", "either-row-type"],
+)
+def test_model_binding_survives_projection_tracking(tmp_path: Path, body: str) -> None:
+    statements = dedent(body).strip()
+    _write(
+        tmp_path / "views.py",
+        "def render(projected):\n"
+        + "".join(f"    {line}\n" for line in statements.splitlines())
+        + "    for post in rows:\n"
+        "        print(post.author.name)\n",
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert finding.suggested_fix == '.select_related("author")'
+    assert finding.confidence == "high"
+
+
+def test_unknown_unpack_clears_stale_projection(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "def render(source):\n"
+        "    rows = Post.objects.values_list('author', named=True)\n"
+        "    [rows, *other] = source\n"
+        "    for post in rows.order_by('id'):\n"
+        "        print(post.author.name)\n",
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert finding.suggested_fix == '.select_related("author")'
+
+
+def test_projection_on_both_continuing_branches_is_suppressed(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "def render(active):\n"
+        "    if active:\n"
+        "        rows = Post.objects.filter(active=True).values_list('author', named=True)\n"
+        "    else:\n"
+        "        rows = Post.objects.filter(active=False).values_list('author', named=True)\n"
+        "    for row in rows.order_by('author'):\n"
+        "        print(row.author.real)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
+
+
+def test_projection_on_only_continuing_branch_is_suppressed(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "def render(active):\n"
+        "    rows = Post.objects.values_list('author', named=True)\n"
+        "    if active:\n"
+        "        rows = Post.objects.all()\n"
+        "        return list(rows)\n"
+        "    for row in rows.order_by('author'):\n"
+        "        print(row.author.real)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
 
 
 def test_related_manager_writes_are_not_reads(tmp_path: Path) -> None:
