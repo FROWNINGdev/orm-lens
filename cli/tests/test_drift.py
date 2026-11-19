@@ -25,6 +25,7 @@ from orm_lens.drift import (
     format_drift,
     replay_app,
 )
+from tests.test_nested_abstract_bases import write_project
 
 HEADER = "from django.db import migrations, models\n\n\n"
 
@@ -301,6 +302,37 @@ class ReplayTest(unittest.TestCase):
         self._write("0002_x.py", '        migrations.DeleteModel(name="Post"),\n')
         self.assertEqual(replay_app(self.migrations)[0], {})
 
+    # --- positional arguments (#303) --------------------------------------
+    # `makemigrations` writes keywords, but hand-written migrations pass the
+    # same values positionally. Django binds them by signature, so the replay
+    # has to as well or whole operations silently vanish and read as drift.
+
+    def test_positional_operation_arguments(self) -> None:
+        self._write(
+            "0001_initial.py",
+            "        migrations.CreateModel(\n"
+            '            "Post", [("id", None), ("title", None), ("legacy", None)],\n'
+            "        ),\n",
+        )
+        self._write(
+            "0002_x.py",
+            '        migrations.AddField("post", "slug", models.CharField(max_length=1)),\n'
+            '        migrations.RemoveField("post", "legacy"),\n'
+            '        migrations.RenameField("post", "title", "headline"),\n',
+        )
+        state, _ = replay_app(self.migrations)
+        self.assertEqual(state, {"post": {"slug", "headline"}})
+
+    def test_positional_delete_and_rename_model(self) -> None:
+        self._write(
+            "0001_initial.py",
+            '        migrations.CreateModel("Post", [("title", None)]),\n',
+        )
+        self._write("0002_x.py", '        migrations.RenameModel("Post", "Article"),\n')
+        self.assertEqual(replay_app(self.migrations)[0], {"article": {"title"}})
+        self._write("0003_x.py", '        migrations.DeleteModel("Article"),\n')
+        self.assertEqual(replay_app(self.migrations)[0], {})
+
     def test_alter_field_changes_nothing_structural(self) -> None:
         self._write(
             "0001_initial.py",
@@ -457,6 +489,28 @@ class DetectDriftTest(unittest.TestCase):
                 "audit": {"entry": {"id", "action", "message"}},
             }
         )
+        self.assertEqual(report.drifted, [])
+
+    def test_positional_delete_and_remove_field_report_no_drift(self) -> None:
+        # Issue #303: the models were moved to another app by hand-written
+        # migrations using positional arguments. A dropped DeleteModel leaves
+        # the stale model in the replayed state, and a dropped RemoveField
+        # leaves its field behind — two false "migrated but undeclared" rows.
+        move = self.root / "blog" / "migrations" / "0002_move.py"
+        move.write_text(
+            _migration(
+                "        migrations.SeparateDatabaseAndState(\n"
+                "            database_operations=[],\n"
+                "            state_operations=[\n"
+                '                migrations.DeleteModel("Network"),\n'
+                "            ],\n"
+                "        ),\n"
+                '        migrations.RemoveField("post", "title"),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+        report = self._detect({"blog": {"post": set()}})
         self.assertEqual(report.drifted, [])
 
     def test_matching_schema_reports_no_drift(self) -> None:
@@ -644,6 +698,44 @@ class SameAppNameTwiceTest(unittest.TestCase):
             self.assertEqual(
                 payload["drifted"][0]["missingInMigrations"], ["never_migrated"]
             )
+
+
+class NestedAbstractBaseDriftTest(unittest.TestCase):
+    """#309: a field from ``NamedMixin.NonUnique`` is declared, not drift."""
+
+    def test_nested_abstract_base_gives_no_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_project(root)
+            for app, models_ in {
+                "assets": [
+                    ("AssetHolder", "models.CharField(max_length=75, db_index=True)"),
+                    ("Manufacturer", "models.CharField(max_length=255, unique=True)"),
+                ],
+                "places": [("Spot", "models.CharField(max_length=20)")],
+            }.items():
+                field = "label" if app == "places" else "name"
+                extra = (
+                    '            ("code", models.CharField(max_length=4)),\n'
+                    if app == "places"
+                    else ""
+                )
+                (root / app / "migrations").mkdir()
+                (root / app / "migrations" / "__init__.py").write_text("", encoding="utf-8")
+                body = "".join(
+                    f'        migrations.CreateModel(name="{model}", fields=[\n'
+                    '            ("id", models.AutoField(primary_key=True)),\n'
+                    f'            ("{field}", {declared}),\n'
+                    f"{extra}"
+                    "        ]),\n"
+                    for model, declared in models_
+                )
+                (root / app / "migrations" / "0001_initial.py").write_text(
+                    _migration(body), encoding="utf-8"
+                )
+
+            payload = detect_drift(str(root)).to_dict()
+            self.assertEqual(payload["drifted"], [])
 
 
 class BlockingPolicyTest(unittest.TestCase):

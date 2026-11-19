@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DOL006 no longer marks snapshot removal safe to apply**
+  ([#313](https://github.com/FROWNINGdev/orm-lens/issues/313)). The VS Code rule
+  skips dictionary views such as `cache.keys()` and offers a manual suggestion
+  for possible QuerySets.
+
+- **parser: resolve an abstract model nested inside another class as a base**
+  ([#309](https://github.com/FROWNINGdev/orm-lens/issues/309)).
+  Ralph's `class AssetHolder(NamedMixin.NonUnique, models.Model)` lost `name`,
+  so `drift` reported it as migrated but no longer declared. An abstract model
+  nested in a class body is now collected as `Outer.Inner`, and a dotted base
+  resolves to it in the same module or in the module `Outer` is imported from.
+  A base spelled `object` no longer counts as an unknown model base, so an
+  abstract `class X(object)` passes no fields, as in Django.
+  Python parser only (`src/parser.ts` not updated).
+
 - **Python parser preserves relation targets when the last field argument is a call**
   ([#300](https://github.com/FROWNINGdev/orm-lens/issues/300)). A trailing
   `verbose_name=_('Document')` no longer causes the parser to misread

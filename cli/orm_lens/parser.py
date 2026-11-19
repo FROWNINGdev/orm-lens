@@ -809,8 +809,14 @@ def _collect_defs(
     file_path: str,
     content: str,
     non_model_names: set[str] | None = None,
+    field_aliases: dict[str, str] | None = None,
+    scope: str = "",
 ) -> list[ParsedModel]:
     """Pass 1 only: collect every class def (name, bases, fields, Meta).
+
+    *scope* (``"Outer."``) is the dotted path of the class body *content* was
+    cut from, so the abstract models nested in its classes come back named,
+    and their bases resolved, from the module down.
 
     No transitive resolution or abstract filtering — callers combine the
     result with definitions from other files before calling
@@ -836,7 +842,8 @@ def _collect_defs(
     lines = [line.expandtabs(4) for line in content.splitlines()]
     all_defs: list[ParsedModel] = []
     in_string = _lines_inside_strings(lines)
-    field_aliases = _field_import_aliases(lines, in_string)
+    if field_aliases is None:
+        field_aliases = _field_import_aliases(lines, in_string)
     app_name = _app_dir_for(file_path)[1] or "app"
 
     i = 0
@@ -882,7 +889,7 @@ def _collect_defs(
             NON_MODEL_TAIL.match(b.split(".")[-1]) for b in base_classes
         ):
             if non_model_names is not None:
-                non_model_names.add(model_name)
+                non_model_names.add(f"{scope}{model_name}")
             i += 1
             continue
 
@@ -1087,9 +1094,106 @@ def _collect_defs(
             _pop_cond_chain(cond_stack, root_scope)
 
         all_defs.append(model)
+        all_defs.extend(
+            _nested_abstract_defs(
+                file_path,
+                lines,
+                in_string,
+                field_aliases,
+                class_header_end + 1,
+                j,
+                indent,
+                f"{scope}{model_name}",
+                non_model_names,
+            )
+        )
         i = j
 
     return all_defs
+
+
+_NESTED_CLASS_RE = re.compile(r"^\s*class\s+(?!Meta\b)([A-Za-z_]\w*)")
+
+
+def _nested_abstract_defs(
+    file_path: str,
+    lines: Sequence[str],
+    in_string: frozenset[int],
+    field_aliases: dict[str, str],
+    start: int,
+    end: int,
+    indent: int,
+    outer: str,
+    non_model_names: set[str] | None = None,
+) -> list[ParsedModel]:
+    """Abstract models declared in a class body, named ``Outer.Inner`` (#309).
+
+    ``class NonUnique(models.Model)`` inside ``NamedMixin`` is a normal abstract
+    model: Django copies its fields onto any class that names
+    ``NamedMixin.NonUnique`` as a base. The body loop skips nested classes, so
+    each one is parsed on its own, dedented, and kept only when abstract; a
+    nested ``TextChoices`` or concrete class adds nothing, and its dotted name
+    goes into *non_model_names* so a base naming it is not looked up by its
+    last part.
+    """
+    out: list[ParsedModel] = []
+    direct: list[ParsedModel] = []
+    # Every nested class binds its name in the body, abstract model or not.
+    bound: list[tuple[int, str]] = []
+    k = start
+    while k < end:
+        header = None if k in in_string else _NESTED_CLASS_RE.match(lines[k])
+        if not header or _line_indent_width(lines[k]) != indent:
+            k += 1
+            continue
+        bound.append((k, header.group(1)))
+        header_end = _find_block_header_end(lines, k)
+        stop = (header_end if header_end is not None else k) + 1
+        while stop < end and (
+            stop in in_string
+            or not lines[stop].strip()
+            or lines[stop].lstrip().startswith("#")
+            or _line_indent_width(lines[stop]) > indent
+        ):
+            stop += 1
+        block = "\n".join(
+            line[indent:] if not line[:indent].strip() else line.lstrip()
+            for line in lines[k:stop]
+        )
+        # The block is parsed alone, so it gets the file's field-import aliases.
+        for nested in _collect_defs(
+            file_path,
+            block,
+            non_model_names,
+            field_aliases=field_aliases,
+            scope=f"{outer}.",
+        ):
+            if not _is_abstract(nested):
+                continue
+            # A class nested deeper comes back named and resolved in its own body.
+            if "." not in nested.name:
+                nested.name = f"{outer}.{nested.name}"
+                direct.append(nested)
+            nested.line_number += k
+            for f in nested.fields:
+                f.line_number += k
+            out.append(nested)
+        k = stop
+    # A base naming a sibling defined above it (``class NonUnique(Common)``) is
+    # that sibling: the class body is the scope its bases are read in, and only
+    # names bound before the class statement are in it. A class body never sees
+    # the enclosing one, so this applies to the direct children only.
+    for d in direct:
+        above = {name for line, name in bound if line < d.line_number}
+        d.base_classes = [
+            f"{outer}.{b}" if b.split(".")[0] in above else b for b in d.base_classes
+        ]
+    if non_model_names is not None:
+        kept = {d.name for d in out}
+        non_model_names.update(
+            f"{outer}.{name}" for _, name in bound if f"{outer}.{name}" not in kept
+        )
+    return out
 
 
 def _read_meta_value(
@@ -1220,7 +1324,8 @@ def _has_model_ancestry(
     non_models = (known_non_models or {}).get(model.file_path, ())
     for base in model.base_classes:
         tail = base.split(".")[-1]
-        if tail in non_models:
+        # ``object`` is never a model; without this it read as an unknown external base.
+        if tail in non_models or base == "object":
             continue
         if re.search(r"models\.Model$", base) or _MODEL_ROOT_TAIL.match(tail):
             return True
@@ -1681,12 +1786,23 @@ class _WorkspaceResolver:
                 return False, None
             module, name = target[0], target[1]
         else:
+            # ``Outer.Inner``: a class nested in a class (#309), defined here or
+            # in the module ``Outer`` is imported from.
+            if base in defs:
+                return True, defs[base]
+            if base in non_models:
+                return True, None
             head = imports.get(qual[0])
             if head is None:
                 module = qual[0]
             elif head[1] is None:
                 module = head[0]
             else:
+                nested = ".".join((head[1], *qual[1:], name))
+                for candidate in _module_files(head[0], str(path), self.root):
+                    found = self._lookup(candidate, nested, hops + 1)
+                    if found[0]:
+                        return found
                 module = _join_module(head[0], head[1])
             for part in qual[1:]:
                 module = _join_module(module, part)
