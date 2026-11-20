@@ -833,6 +833,64 @@ def _build_current_schema(
     return schema
 
 
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level ``NAME = "sql"`` assigns, so RunSQL(SOME_SQL) is readable."""
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out[t.id] = node.value.value
+    return out
+
+
+def _sql_changes_rows_sql(sql: str) -> bool:
+    """SQL that inserts, deletes, truncates or updates rows."""
+    return bool(re.search(r"\b(INSERT|DELETE|TRUNCATE|UPDATE)\b", sql, re.I))
+
+
+def _tree_has_data_op(tree: ast.Module) -> bool:
+    """RunPython or row-changing RunSQL anywhere in this migration file.
+
+    Read by the per-app replay loop: a data operation in an earlier
+    migration means the tables this app seeds are not guaranteed empty
+    when a later ``initial = True`` migration executes.
+    """
+    strings = _module_string_constants(tree)
+    cls = _find_migration_class(tree)
+    if cls is None:
+        return False
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        if "operations" not in targets or not isinstance(stmt.value, (ast.List, ast.Tuple)):
+            continue
+        for elt in stmt.value.elts:
+            if not isinstance(elt, ast.Call):
+                continue
+            op = _call_op_name(elt)
+            if op == "RunPython":
+                return True
+            if op != "RunSQL":
+                continue
+            node = _get_kwarg(elt, "sql") or (elt.args[0] if elt.args else None)
+            parts = node.elts if isinstance(node, (ast.List, ast.Tuple)) else [node]
+            for part in parts:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    if _sql_changes_rows_sql(part.value):
+                        return True
+                elif isinstance(part, ast.Name) and _sql_changes_rows_sql(
+                    strings.get(part.id, "")
+                ):
+                    return True
+    return False
+
+
 class MigrationRiskAnalyzer:
     """AST-walk one migration file and emit :class:`MigrationRisk` findings.
 
@@ -850,6 +908,7 @@ class MigrationRiskAnalyzer:
         migration_name: str,
         migration_index: int,
         current_schema: dict[str, dict[str, set]] | None = None,
+        earlier_data_ops: bool = False,
     ) -> None:
         self.file_path = file_path
         self.app = app
@@ -868,9 +927,16 @@ class MigrationRiskAnalyzer:
         # applied without running it, so it never touches populated tables.
         self.is_squashed = False
         # A second ``initial = True`` migration (makemigrations splits cross-app
-        # FKs into one) also only ever runs on a fresh database, so treat it
-        # like a squash for population purposes.
+        # FKs into one) also only ever runs on a fresh database — as long as no
+        # earlier migration of the app runs a data operation. A 0001 that seeds
+        # rows leaves the table populated when 0002 executes, so the fresh-
+        # database exemption must not apply then.
         self.is_initial = False
+        # A data operation in any earlier migration of the same app (replay
+        # order): it may have seeded or emptied the table before this file
+        # runs, so a second ``initial = True`` migration is not automatically
+        # fresh either.
+        self.earlier_data_ops = earlier_data_ops
         # (line, model, field-or-None) for every operation that brings a field
         # or a whole model (back) into existence. A RemoveField followed by an
         # AddField or a RenameField onto the same name, or a DeleteModel
@@ -896,15 +962,7 @@ class MigrationRiskAnalyzer:
             return []
 
         # Module-level string constants, so RunSQL(SOME_SQL) can be read.
-        for node in tree.body:
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-            ):
-                for t in node.targets:
-                    if isinstance(t, ast.Name):
-                        self.module_strings[t.id] = node.value.value
+        self.module_strings = _module_string_constants(tree)
 
         for node in tree.body:
             if not isinstance(node, ast.ClassDef) or node.name != "Migration":
@@ -1022,7 +1080,7 @@ class MigrationRiskAnalyzer:
                 sql = self.module_strings.get(part.id, "")
             else:
                 continue
-            if re.search(r"\b(INSERT|DELETE|TRUNCATE|UPDATE)\b", sql, re.I):
+            if _sql_changes_rows_sql(sql):
                 return True
         return False
 
@@ -1033,11 +1091,17 @@ class MigrationRiskAnalyzer:
         migration, or a second ``initial = True`` migration with no earlier
         data operation — all of which only ever run on a fresh database. An
         initial migration that runs a data operation first may populate the
-        table before the NOT NULL column arrives, so it is not exempt. Nor is
-        a table created in this migration still empty once a data operation
-        has run against it.
+        table before the NOT NULL column arrives, so it is not exempt — and
+        neither is one whose app ran a data operation in an earlier migration
+        (a seeded 0001 leaves rows behind when 0002 executes). Nor is a table
+        created in this migration still empty once a data operation has run
+        against it.
         """
-        if self.is_squashed or (self.is_initial and not self.data_op_before):
+        if self.is_squashed or (
+            self.is_initial
+            and not self.data_op_before
+            and not self.earlier_data_ops
+        ):
             return False
         if (
             isinstance(model, str)
@@ -1098,6 +1162,15 @@ class MigrationRiskAnalyzer:
                 description += (
                     " A data operation runs earlier in this migration; if it "
                     "empties the table, this is safe."
+                )
+                nn_confidence, nn_severity = "medium", "warning"
+            elif self.earlier_data_ops:
+                # Same reasoning one migration earlier: the app's history
+                # includes a data operation, so the table may be empty after
+                # all and this is a false positive.
+                description += (
+                    " A data operation runs in an earlier migration of this "
+                    "app; if it emptied the table, this is safe."
                 )
                 nn_confidence, nn_severity = "medium", "warning"
             self._add(
@@ -1641,16 +1714,20 @@ def analyze_migration_risks(
         # (migration index, line, model, field-or-None) for every operation in
         # the app that brings a name (back) into existence.
         introduced: list[tuple[int, int, str, str | None]] = []
-        for idx, path in enumerate(ordered_files):
+        seen_data_op = False
+        for idx, (path, tree) in enumerate(ordered):
             analyzer = MigrationRiskAnalyzer(
                 file_path=path,
                 app=app_label,
                 migration_name=path.stem,
                 migration_index=idx,
                 current_schema=current_schema,
+                earlier_data_ops=seen_data_op,
             )
             app_findings.extend((idx, f) for f in analyzer.analyze())
             introduced.extend((idx, line, m, fl) for line, m, fl in analyzer.introduced)
+            # Accumulate after analyzing: only earlier migrations count.
+            seen_data_op = seen_data_op or _tree_has_data_op(tree)
         findings.extend(
             f for idx, f in app_findings if not _reintroduced_later(idx, f, introduced)
         )

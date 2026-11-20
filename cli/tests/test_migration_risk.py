@@ -953,6 +953,41 @@ class RealWorldPrecisionTest(unittest.TestCase):
             self._rules(add, extra="    initial = True\n"),
         )
 
+    def test_initial_migration_after_seeded_first_is_not_exempt(self) -> None:
+        # 0001 seeds rows with a data operation; 0002 is marked initial = True.
+        # Django still executes the second migration against the seeded table
+        # (initial only matters to --fake-initial), so the fresh-database
+        # exemption must not hide a NOT NULL AddField there. The finding is
+        # softened, not dropped: the earlier operation may also have emptied
+        # the table.
+        seeded = (
+            "from django.db import migrations\n"
+            "def seed(apps, schema_editor):\n"
+            "    pass\n"
+            "class Migration(migrations.Migration):\n"
+            "    dependencies = []\n"
+            "    operations = [\n"
+            "        migrations.RunPython(seed, migrations.RunPython.noop),\n"
+            "    ]\n"
+        )
+        add = self._add("models.CharField(max_length=50)")
+        for first, expected in ((seeded, True), (_INITIAL, False)):
+            with TemporaryDirectory() as tmp:
+                app = Path(tmp) / "orders"
+                _write(app, "0001_initial", first)
+                _write(app, "0002_change", _second(add, extra="    initial = True\n"))
+                findings = analyze_migration_risks(
+                    tmp, current_schema=_empty_schema()
+                )
+            rules = _by_rule(findings)
+            if expected:
+                self.assertIn("add_field_not_null_no_default", rules)
+                self.assertEqual(
+                    rules["add_field_not_null_no_default"][0].severity, "warning"
+                )
+            else:
+                self.assertNotIn("add_field_not_null_no_default", rules)
+
     def test_nullable_unique_column_fills_rows_with_null(self) -> None:
         for field in (
             "models.CharField(blank=True, max_length=12, null=True, unique=True)",
