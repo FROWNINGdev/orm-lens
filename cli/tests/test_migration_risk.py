@@ -936,6 +936,50 @@ class RealWorldPrecisionTest(unittest.TestCase):
             self._rules(create + line_add),
         )
 
+    def test_select_for_update_is_not_a_row_change(self) -> None:
+        # A locking SELECT mentions UPDATE but changes no rows; matching the
+        # keyword anywhere in the SQL would wrongly soften a critical NOT NULL
+        # finding. Classify each statement by its leading verb instead.
+        add = self._add("models.CharField(max_length=50)")
+        lock = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [('SELECT id FROM orders_order FOR UPDATE', None)],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(lock["add_field_not_null_no_default"][0].severity, "critical")
+        # A CTE-led statement that ends in a row change is still detected.
+        cte = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [('WITH t AS (SELECT id FROM orders_order) "
+            "UPDATE orders_order SET x = 1', [None])],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(cte["add_field_not_null_no_default"][0].severity, "warning")
+
+    def test_data_op_before_creation_keeps_model_exempt(self) -> None:
+        # A data operation that runs before the model is created cannot have
+        # populated its table, so it must not reject the creation-based
+        # exemption; only one that runs after CreateModel can.
+        run = (
+            "        migrations.RunSQL(\n"
+            "            [('UPDATE orders_order SET x = 1', [None])],\n"
+            "            migrations.RunSQL.noop),\n"
+        )
+        create = "        migrations.CreateModel(name='Line', fields=[]),\n"
+        line_add = (
+            "        migrations.AddField(model_name='line', name='x', "
+            "field=models.CharField(max_length=50)),\n"
+        )
+        self.assertNotIn(
+            "add_field_not_null_no_default",
+            self._rules(run + create + line_add),
+        )
+        # An operation after creation still rejects the exemption.
+        self.assertIn(
+            "add_field_not_null_no_default",
+            self._rules(create + run + line_add),
+        )
+
     def test_run_sql_insert_counts_as_data_op_in_initial_migration(self) -> None:
         # An INSERT in an initial migration populates the table just as a
         # RunPython does, so a later NOT NULL field without a default is a real

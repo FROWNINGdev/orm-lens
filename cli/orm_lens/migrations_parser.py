@@ -848,9 +848,41 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
     return out
 
 
+_ROW_CHANGE_VERB_RE = re.compile(r"^(INSERT|UPDATE|DELETE|TRUNCATE)\b", re.I)
+
+
+def _leading_row_change_verb(stmt: str) -> bool:
+    stripped = stmt.lstrip()
+    while stripped.startswith("("):
+        stripped = stripped[1:].lstrip()
+    return bool(_ROW_CHANGE_VERB_RE.match(stripped))
+
+
 def _sql_changes_rows_sql(sql: str) -> bool:
-    """SQL that inserts, deletes, truncates or updates rows."""
-    return bool(re.search(r"\b(INSERT|DELETE|TRUNCATE|UPDATE)\b", sql, re.I))
+    """SQL whose statements insert, delete, truncate or update rows.
+
+    Classify each ``;``-separated statement by its leading verb, so a
+    locking ``SELECT ... FOR UPDATE`` is not mistaken for a row change,
+    while a CTE-led statement (``WITH x AS (...) UPDATE ...``) still is.
+    """
+    # Comments first: prose mentioning UPDATE is not an UPDATE statement.
+    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
+    sql = re.sub(r"--[^\n]*", " ", sql)
+    for stmt in sql.split(";"):
+        if _leading_row_change_verb(stmt):
+            return True
+        if re.match(r"\s*WITH\b", stmt, re.I):
+            # The action verb follows the CTE definitions; skip their
+            # parenthesized bodies and classify the remainder.
+            depth = 0
+            for match in re.finditer(r"[()]", stmt):
+                if match.group() == "(":
+                    depth += 1
+                elif depth > 0:
+                    depth -= 1
+                    if depth == 0 and _leading_row_change_verb(stmt[match.end():]):
+                        return True
+    return False
 
 
 def _tree_has_data_op(tree: ast.Module) -> bool:
@@ -950,6 +982,11 @@ class MigrationRiskAnalyzer:
         # A data operation earlier in the file that may empty or backfill the
         # table before a NOT NULL column arrives.
         self.data_op_before = False
+        # Operation positions replayed by _walk_operations: where each model
+        # was created and where data operations ran, so a data operation that
+        # precedes a model's creation cannot suppress its emptiness exemption.
+        self.data_op_positions: list[int] = []
+        self.created_at: dict[str, int] = {}
         self.module_strings: dict[str, str] = {}
 
     # ------------------------------------------------------------------
@@ -994,7 +1031,7 @@ class MigrationRiskAnalyzer:
     def _walk_operations(self, ops_node: ast.AST) -> None:
         if not isinstance(ops_node, (ast.List, ast.Tuple)):
             return
-        for elt in ops_node.elts:
+        for position, elt in enumerate(ops_node.elts):
             if not isinstance(elt, ast.Call):
                 continue
             op = _call_op_name(elt)
@@ -1005,13 +1042,16 @@ class MigrationRiskAnalyzer:
                 if created is None and elt.args:
                     created = _literal_or_none(elt.args[0])
                 if isinstance(created, str):
-                    self.created_models.add(created.lower())
+                    created = created.lower()
+                    self.created_models.add(created)
+                    self.created_at[created] = position
             handler = getattr(self, f"_check_{op}", None)
             self._record_introduction(op, elt)
             if op == "RunPython" or (op == "RunSQL" and self._sql_changes_rows(elt)):
                 # Read only by operations later in the list; this element's own
                 # handler does not look at it.
                 self.data_op_before = True
+                self.data_op_positions.append(position)
             if handler is not None:
                 try:
                     handler(elt)
@@ -1114,10 +1154,22 @@ class MigrationRiskAnalyzer:
         if (
             isinstance(model, str)
             and model.lower() in self.created_models
-            and not self.data_op_before
+            and not self._data_op_after_creation(model.lower())
         ):
             return False
         return self.migration_index > 0
+
+    def _data_op_after_creation(self, model_lower: str) -> bool:
+        """True when a data operation runs after this migration created the model.
+
+        A data operation placed before ``CreateModel`` cannot have populated
+        the table, so it must not reject the creation-based emptiness
+        exemption; only one that runs against the created table can.
+        """
+        created = self.created_at.get(model_lower)
+        if created is None:
+            return self.data_op_before
+        return any(position > created for position in self.data_op_positions)
 
     def _model_field_names(self, model_lower: str) -> set | None:
         app_schema = self.current_schema.get(self.app)
