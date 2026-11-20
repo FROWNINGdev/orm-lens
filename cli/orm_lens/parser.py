@@ -1247,6 +1247,15 @@ def _is_abstract(model: ParsedModel) -> bool:
     return model.meta.get("abstract", "").strip() in ("True", "1", "true")
 
 
+def _effective_app_label(model: ParsedModel) -> str:
+    raw = model.meta.get("app_label", "").strip()
+    try:
+        label = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        label = None
+    return label if isinstance(label, str) and label else model.app_name
+
+
 def _pick_base(
     candidates: list[ParsedModel], model: ParsedModel
 ) -> ParsedModel | None:
@@ -2107,8 +2116,8 @@ def _attach_implicit_parent_links(
                 parents = {
                     key: parent
                     for key, parent in parents.items()
-                    if (parent.app_name.lower(), parent.name.lower())
-                    != ((app or model.app_name).lower(), name.lower())
+                    if (_effective_app_label(parent).lower(), parent.name.lower())
+                    != ((app or _effective_app_label(model)).lower(), name.lower())
                 }
             elif target is not None:
                 target_name = _dotted_name(target)

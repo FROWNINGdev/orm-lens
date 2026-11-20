@@ -25,6 +25,7 @@ from orm_lens.drift import (
     format_drift,
     replay_app,
 )
+from orm_lens.parser import scan_workspace
 from tests.test_nested_abstract_bases import write_project
 
 HEADER = "from django.db import migrations, models\n\n\n"
@@ -606,6 +607,39 @@ class DetectDriftTest(unittest.TestCase):
         )
 
         self.assertEqual(detect_drift(self.root).drifted, [])
+
+    def test_explicit_parent_link_uses_effective_meta_app_label(self) -> None:
+        blog = self.root / "blog"
+        (blog / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Parent(models.Model):\n"
+            "    class Meta:\n"
+            "        app_label = 'effective'\n\n"
+            "class Child(Parent):\n"
+            "    parent_link = models.OneToOneField(\n"
+            "        'effective.Parent', on_delete=models.CASCADE, parent_link=True\n"
+            "    )\n\n"
+            "class LocalParent(models.Model):\n"
+            "    pass\n\n"
+            "class LocalChild(LocalParent):\n"
+            "    local_link = models.OneToOneField(\n"
+            "        'LocalParent', on_delete=models.CASCADE, parent_link=True\n"
+            "    )\n\n"
+            "class PlainParent(models.Model):\n"
+            "    pass\n\n"
+            "class PlainChild(PlainParent):\n"
+            "    pass\n",
+            encoding="utf-8",
+        )
+
+        models = {
+            model.name: model
+            for app in scan_workspace(str(self.root)).apps
+            for model in app.models
+        }
+        self.assertEqual(models["Child"].implicit_parent_links, set())
+        self.assertEqual(models["LocalChild"].implicit_parent_links, set())
+        self.assertEqual(models["PlainChild"].implicit_parent_links, {"plainparent_ptr"})
 
     def test_conditional_parent_link_is_not_a_blocking_field(self) -> None:
         for app, parent in (("basepage", "BasePage"), ("core", "Page")):
