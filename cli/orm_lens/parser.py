@@ -1247,13 +1247,31 @@ def _is_abstract(model: ParsedModel) -> bool:
     return model.meta.get("abstract", "").strip() in ("True", "1", "true")
 
 
-def _effective_app_label(model: ParsedModel) -> str:
+def _configured_app_labels(models: Sequence[ParsedModel]) -> dict[Path, str | None]:
+    """Read literal AppConfig labels once for the app directories in *models*."""
+    from .migrations_parser import _configured_app_label
+
+    labels: dict[Path, str | None] = {}
+    for model in models:
+        app_dir, _ = _app_dir_for(model.file_path)
+        path = Path(app_dir).resolve()
+        if path not in labels:
+            labels[path] = _configured_app_label(path)
+    return labels
+
+
+def _effective_app_label(
+    model: ParsedModel, configured_labels: dict[Path, str | None]
+) -> str:
     raw = model.meta.get("app_label", "").strip()
     try:
         label = ast.literal_eval(raw)
     except (ValueError, SyntaxError):
         label = None
-    return label if isinstance(label, str) and label else model.app_name
+    if isinstance(label, str) and label:
+        return label
+    app_dir, _ = _app_dir_for(model.file_path)
+    return configured_labels.get(Path(app_dir).resolve()) or model.app_name
 
 
 def _pick_base(
@@ -2053,6 +2071,7 @@ def _attach_implicit_parent_links(
     models: list[ParsedModel], resolver: _WorkspaceResolver
 ) -> None:
     """Find the columns Django adds for direct, resolved concrete parents."""
+    configured_labels = _configured_app_labels(models)
 
     def model_key(model: ParsedModel) -> tuple[Path, str]:
         return resolver._resolved(Path(model.file_path)), model.name
@@ -2116,8 +2135,13 @@ def _attach_implicit_parent_links(
                 parents = {
                     key: parent
                     for key, parent in parents.items()
-                    if (_effective_app_label(parent).lower(), parent.name.lower())
-                    != ((app or _effective_app_label(model)).lower(), name.lower())
+                    if (
+                        _effective_app_label(parent, configured_labels).lower(),
+                        parent.name.lower(),
+                    ) != (
+                        (app or _effective_app_label(model, configured_labels)).lower(),
+                        name.lower(),
+                    )
                 }
             elif target is not None:
                 target_name = _dotted_name(target)

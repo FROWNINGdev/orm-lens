@@ -641,6 +641,84 @@ class DetectDriftTest(unittest.TestCase):
         self.assertEqual(models["LocalChild"].implicit_parent_links, set())
         self.assertEqual(models["PlainChild"].implicit_parent_links, {"plainparent_ptr"})
 
+    def test_explicit_parent_link_uses_literal_app_config_label(self) -> None:
+        labelled = self.root / "labelled"
+        labelled.mkdir()
+        (labelled / "apps.py").write_text(
+            "from django.apps import AppConfig\n\n"
+            "class LabelledConfig(AppConfig):\n"
+            "    name = 'labelled'\n"
+            "    label = 'effective'\n",
+            encoding="utf-8",
+        )
+        (labelled / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Parent(models.Model):\n"
+            "    pass\n\n"
+            "class Child(Parent):\n"
+            "    parent_link = models.OneToOneField(\n"
+            "        'effective.Parent', on_delete=models.CASCADE, parent_link=True\n"
+            "    )\n\n"
+            "class LocalChild(Parent):\n"
+            "    local_link = models.OneToOneField(\n"
+            "        'Parent', on_delete=models.CASCADE, parent_link=True\n"
+            "    )\n\n"
+            "class MetaParent(models.Model):\n"
+            "    class Meta:\n"
+            "        app_label = 'meta_effective'\n\n"
+            "class MetaChild(MetaParent):\n"
+            "    meta_link = models.OneToOneField(\n"
+            "        'meta_effective.MetaParent', on_delete=models.CASCADE, parent_link=True\n"
+            "    )\n\n"
+            "class ProxyParent(models.Model):\n"
+            "    pass\n\n"
+            "class ProxyParentView(ProxyParent):\n"
+            "    class Meta:\n"
+            "        proxy = True\n\n"
+            "class ProxyChild(ProxyParentView):\n"
+            "    pass\n",
+            encoding="utf-8",
+        )
+        for package in ("fallback", "ambiguous"):
+            app_dir = self.root / package
+            app_dir.mkdir()
+            (app_dir / "models.py").write_text(
+                "from django.db import models\n\n"
+                "class Parent(models.Model):\n"
+                "    pass\n\n"
+                "class Child(Parent):\n"
+                "    link = models.OneToOneField(\n"
+                f"        '{package}.Parent', on_delete=models.CASCADE, parent_link=True\n"
+                "    )\n",
+                encoding="utf-8",
+            )
+        (self.root / "ambiguous" / "apps.py").write_text(
+            "from django.apps import AppConfig\n\n"
+            "class FirstConfig(AppConfig):\n"
+            "    name = 'ambiguous'\n"
+            "    label = 'first'\n\n"
+            "class SecondConfig(AppConfig):\n"
+            "    name = 'ambiguous'\n"
+            "    label = 'second'\n",
+            encoding="utf-8",
+        )
+
+        models = {
+            (model.app_name, model.name): model
+            for app in scan_workspace(str(self.root)).apps
+            for model in app.models
+        }
+        for package, model in (
+            ("labelled", "Child"),
+            ("labelled", "LocalChild"),
+            ("labelled", "MetaChild"),
+            ("fallback", "Child"),
+            ("ambiguous", "Child"),
+        ):
+            with self.subTest(package=package, model=model):
+                self.assertEqual(models[package, model].implicit_parent_links, set())
+        self.assertEqual(models["labelled", "ProxyChild"].implicit_parent_links, {"proxyparent_ptr"})
+
     def test_conditional_parent_link_is_not_a_blocking_field(self) -> None:
         for app, parent in (("basepage", "BasePage"), ("core", "Page")):
             directory = self.root / app
