@@ -988,6 +988,84 @@ class RealWorldPrecisionTest(unittest.TestCase):
             else:
                 self.assertNotIn("add_field_not_null_no_default", rules)
 
+    def test_ordinary_migration_after_seeded_first_keeps_critical(self) -> None:
+        # A data operation in 0001 does not make the table empty when a later
+        # ordinary (non-initial) migration runs: seeded rows persist until
+        # something deletes them, so the NOT NULL finding keeps critical
+        # severity there. Only a second ``initial = True`` migration — the
+        # fresh-database context — earns the historical soften.
+        seeded = (
+            "from django.db import migrations\n"
+            "def seed(apps, schema_editor):\n"
+            "    pass\n"
+            "class Migration(migrations.Migration):\n"
+            "    dependencies = []\n"
+            "    operations = [\n"
+            "        migrations.RunPython(seed, migrations.RunPython.noop),\n"
+            "    ]\n"
+        )
+        add = self._add("models.CharField(max_length=50)")
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "orders"
+            _write(app, "0001_initial", seeded)
+            _write(app, "0002_change", _second(add))
+            findings = analyze_migration_risks(
+                tmp, current_schema=_empty_schema()
+            )
+        rules = _by_rule(findings)
+        self.assertIn("add_field_not_null_no_default", rules)
+        self.assertEqual(rules["add_field_not_null_no_default"][0].severity, "critical")
+
+    def test_run_sql_query_param_pair_counts_as_data_op(self) -> None:
+        # Django's RunSQL also accepts query/parameter pairs, e.g.
+        # [("UPDATE ...", [None])]. The pair must be unwrapped before the
+        # row-changing check, both within a file and across the app replay —
+        # otherwise an INSERT/UPDATE expressed as a pair silently keeps the
+        # fresh-database exemption alive.
+        add = self._add("models.CharField(max_length=50)")
+        pair = (
+            "        migrations.RunSQL(\n"
+            "            [('UPDATE orders_order SET x = 1', [None])],\n"
+            "            migrations.RunSQL.noop),\n"
+        )
+        softened = self._rules(pair + add, extra="    initial = True\n")
+        self.assertIn("add_field_not_null_no_default", softened)
+        self.assertEqual(
+            softened["add_field_not_null_no_default"][0].severity, "warning"
+        )
+        # A read-only pair is not a data operation: the exemption holds.
+        read_only = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [('SELECT COUNT(*) FROM orders_order', [None])],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+            extra="    initial = True\n",
+        )
+        self.assertNotIn("add_field_not_null_no_default", read_only)
+        # Cross-file: 0001 seeds via a pair-form INSERT, so a second
+        # initial = True migration is not exempt (replay-loop detection).
+        seeded_pair = (
+            "from django.db import migrations\n"
+            "class Migration(migrations.Migration):\n"
+            "    dependencies = []\n"
+            "    operations = [\n"
+            "        migrations.RunSQL(\n"
+            "            [('INSERT INTO orders_order (id) VALUES (1)', [1])],\n"
+            "            migrations.RunSQL.noop),\n"
+            "    ]\n"
+        )
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "orders"
+            _write(app, "0001_initial", seeded_pair)
+            _write(app, "0002_change", _second(add, extra="    initial = True\n"))
+            findings = analyze_migration_risks(
+                tmp, current_schema=_empty_schema()
+            )
+        replayed = _by_rule(findings)
+        self.assertIn("add_field_not_null_no_default", replayed)
+        self.assertEqual(
+            replayed["add_field_not_null_no_default"][0].severity, "warning"
+        )
+
     def test_nullable_unique_column_fills_rows_with_null(self) -> None:
         for field in (
             "models.CharField(blank=True, max_length=12, null=True, unique=True)",

@@ -881,6 +881,10 @@ def _tree_has_data_op(tree: ast.Module) -> bool:
             node = _get_kwarg(elt, "sql") or (elt.args[0] if elt.args else None)
             parts = node.elts if isinstance(node, (ast.List, ast.Tuple)) else [node]
             for part in parts:
+                if isinstance(part, ast.Tuple) and part.elts:
+                    # Django also accepts query/parameter pairs; the first
+                    # element is the SQL statement.
+                    part = part.elts[0]
                 if isinstance(part, ast.Constant) and isinstance(part.value, str):
                     if _sql_changes_rows_sql(part.value):
                         return True
@@ -1074,6 +1078,10 @@ class MigrationRiskAnalyzer:
         node = _get_kwarg(call, "sql") or (call.args[0] if call.args else None)
         parts = node.elts if isinstance(node, (ast.List, ast.Tuple)) else [node]
         for part in parts:
+            if isinstance(part, ast.Tuple) and part.elts:
+                # Django also accepts query/parameter pairs; the first
+                # element is the SQL statement.
+                part = part.elts[0]
             if isinstance(part, ast.Constant) and isinstance(part.value, str):
                 sql = part.value
             elif isinstance(part, ast.Name):
@@ -1164,10 +1172,13 @@ class MigrationRiskAnalyzer:
                     "empties the table, this is safe."
                 )
                 nn_confidence, nn_severity = "medium", "warning"
-            elif self.earlier_data_ops:
-                # Same reasoning one migration earlier: the app's history
-                # includes a data operation, so the table may be empty after
-                # all and this is a false positive.
+            elif self.is_initial and self.earlier_data_ops:
+                # Only an ``initial = True`` migration gets this historical
+                # soften: it normally runs on a fresh database, so an earlier
+                # data operation is the only thing that could have put rows
+                # there. An ordinary later migration keeps critical severity
+                # — seeded rows persist until something deletes them, so a
+                # past data operation says nothing about the table now.
                 description += (
                     " A data operation runs in an earlier migration of this "
                     "app; if it emptied the table, this is safe."
