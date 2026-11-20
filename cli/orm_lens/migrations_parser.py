@@ -850,6 +850,8 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
 
 _ROW_CHANGE_VERB_RE = re.compile(r"^(INSERT|UPDATE|DELETE|TRUNCATE)\b", re.I)
 
+_DOLLAR_TAG_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
+
 
 def _leading_row_change_verb(stmt: str) -> bool:
     stripped = stmt.lstrip()
@@ -858,30 +860,94 @@ def _leading_row_change_verb(stmt: str) -> bool:
     return bool(_ROW_CHANGE_VERB_RE.match(stripped))
 
 
+def _mask_sql_text(sql: str) -> str:
+    """Blank quoted literals and comments to spaces, keeping SQL structure.
+
+    PostgreSQL allows arbitrary characters inside quotes, so ``--`` in a
+    string literal is data, not a comment — and a ``;`` or ``(`` inside one
+    is data too. Dollar-quoted bodies (``$$...$$``) are opaque for the same
+    reason. With every literal and comment reduced to spaces, verb
+    classification, ``;`` splitting and paren matching only ever see real
+    statement structure.
+    """
+    out = list(sql)
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in ("'", '"'):
+            quote = ch
+            out[i] = " "
+            i += 1
+            while i < n:
+                if sql[i] == quote:
+                    if sql[i + 1 : i + 2] == quote:  # doubled quote stays inside
+                        out[i] = out[i + 1] = " "
+                        i += 2
+                        continue
+                    out[i] = " "
+                    i += 1
+                    break
+                out[i] = " "
+                i += 1
+            continue
+        if ch == "$":
+            tag = _DOLLAR_TAG_RE.match(sql, i)
+            if tag:
+                end = sql.find(tag.group(), tag.end())
+                end = n if end == -1 else end + len(tag.group())
+                for j in range(i, end):
+                    out[j] = " "
+                i = end
+                continue
+        if ch == "-" and sql[i + 1 : i + 2] == "-":
+            while i < n and sql[i] != "\n":  # keep the newline as structure
+                out[i] = " "
+                i += 1
+            continue
+        if ch == "/" and sql[i + 1 : i + 2] == "*":
+            end = sql.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            for j in range(i, end):
+                out[j] = " "
+            i = end
+            continue
+        i += 1
+    return "".join(out)
+
+
 def _sql_changes_rows_sql(sql: str) -> bool:
     """SQL whose statements insert, delete, truncate or update rows.
 
     Classify each ``;``-separated statement by its leading verb, so a
-    locking ``SELECT ... FOR UPDATE`` is not mistaken for a row change,
-    while a CTE-led statement (``WITH x AS (...) UPDATE ...``) still is.
+    locking ``SELECT ... FOR UPDATE`` is not mistaken for a row change.
+    Literals and comments are blanked first, so ``'--'`` inside a string
+    never reads as a comment; a data-modifying CTE body (``WITH x AS
+    (INSERT ...) SELECT ...``) is classified as well as the statement
+    that follows it, since PostgreSQL runs it even for a SELECT tail.
     """
-    # Comments first: prose mentioning UPDATE is not an UPDATE statement.
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
-    sql = re.sub(r"--[^\n]*", " ", sql)
-    for stmt in sql.split(";"):
+    masked = _mask_sql_text(sql)
+    for stmt in masked.split(";"):
         if _leading_row_change_verb(stmt):
             return True
         if re.match(r"\s*WITH\b", stmt, re.I):
-            # The action verb follows the CTE definitions; skip their
-            # parenthesized bodies and classify the remainder.
+            # The action verb may live inside a CTE body rather than after
+            # the last group, so classify each top-level parenthesized body
+            # and the tail that follows it.
             depth = 0
+            body_start = None
             for match in re.finditer(r"[()]", stmt):
                 if match.group() == "(":
+                    if depth == 0:
+                        body_start = match.end()
                     depth += 1
                 elif depth > 0:
                     depth -= 1
-                    if depth == 0 and _leading_row_change_verb(stmt[match.end():]):
-                        return True
+                    if depth == 0 and body_start is not None:
+                        if _leading_row_change_verb(stmt[body_start:match.start()]):
+                            return True
+                        if _leading_row_change_verb(stmt[match.end():]):
+                            return True
+                        body_start = None
     return False
 
 

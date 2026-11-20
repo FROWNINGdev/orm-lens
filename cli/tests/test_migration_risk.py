@@ -956,6 +956,48 @@ class RealWorldPrecisionTest(unittest.TestCase):
         )
         self.assertEqual(cte["add_field_not_null_no_default"][0].severity, "warning")
 
+    def test_comment_marker_inside_literal_is_not_a_comment(self) -> None:
+        # PostgreSQL allows any character inside a string literal, so '--'
+        # there is data, not a comment. Stripping comments quote-unaware
+        # eats the rest of the line and hides a real INSERT that follows,
+        # wrongly keeping the critical severity for the NOT NULL AddField.
+        add = self._add("models.CharField(max_length=50)")
+        trap = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [(\"SELECT '--'; INSERT INTO orders_order (id) VALUES (1)\", [None])],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(trap["add_field_not_null_no_default"][0].severity, "warning")
+        # The same literal without a row change stays a plain SELECT: the
+        # quote-aware pass must not turn the marker into a false positive.
+        plain = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [(\"SELECT '--' FROM orders_order\", None)],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(plain["add_field_not_null_no_default"][0].severity, "critical")
+
+    def test_modifying_cte_body_counts_as_data_op(self) -> None:
+        # PostgreSQL runs a data-modifying CTE even when the trailing
+        # statement is a plain SELECT, so the INSERT inside the CTE body
+        # must be classified, not just the tail after the closing paren.
+        add = self._add("models.CharField(max_length=50)")
+        seeded = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [('WITH seeded AS (INSERT INTO orders_order (id) VALUES (1) "
+            "RETURNING id) SELECT id FROM seeded', [None])],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(seeded["add_field_not_null_no_default"][0].severity, "warning")
+        # A SELECT-only CTE is still a non-modifying statement.
+        reads = self._rules(
+            "        migrations.RunSQL(\n"
+            "            [('WITH totals AS (SELECT count(*) FROM orders_order) "
+            "SELECT count(*) FROM totals', None)],\n"
+            "            migrations.RunSQL.noop),\n" + add,
+        )
+        self.assertEqual(reads["add_field_not_null_no_default"][0].severity, "critical")
+
     def test_data_op_before_creation_keeps_model_exempt(self) -> None:
         # A data operation that runs before the model is created cannot have
         # populated its table, so it must not reject the creation-based
