@@ -35,7 +35,8 @@ class ThirdPartyModelBasesTest(unittest.TestCase):
             models_py.parent.mkdir(parents=True)
             models_py.write_text(src, encoding="utf-8")
 
-            models_, _ = scan_workspace(root)
+            index = scan_workspace(str(root))
+            models_ = [model for app in index.apps for model in app.models]
             by_name = {m.name: [f.name for f in m.fields] for m in models_}
             self.assertEqual(
                 by_name,
@@ -61,7 +62,8 @@ class ThirdPartyModelBasesTest(unittest.TestCase):
             models_py.parent.mkdir(parents=True)
             models_py.write_text(src, encoding="utf-8")
 
-            models_, _ = scan_workspace(root)
+            index = scan_workspace(str(root))
+            models_ = [model for app in index.apps for model in app.models]
             self.assertEqual(models_, [])
 
 
