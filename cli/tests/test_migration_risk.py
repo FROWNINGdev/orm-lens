@@ -226,6 +226,28 @@ class AddFieldNotNullTest(unittest.TestCase):
         )
         self.assertNotIn("add_field_unique_no_row_default", rules)
 
+    def test_literal_db_default_stays_critical_with_callable_default(self) -> None:
+        """ADD COLUMN ignores the Python callable when db_default is set, so a
+        literal db_default=True still copies one value to every row."""
+        rules = self._add_field_findings(
+            "models.BooleanField(null=True, unique=True, default=bool, db_default=True)"
+        )
+        unique = rules.get("add_field_unique_no_row_default", [])
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0].severity, "critical")
+
+    def test_negative_db_default_none_overrides_python_default(self) -> None:
+        """db_default=None wins over default=True: existing rows get NULL."""
+        rules = self._add_field_findings(
+            "models.BooleanField(null=True, unique=True, default=True, db_default=None)"
+        )
+        self.assertNotIn("add_field_unique_no_row_default", rules)
+
+    def test_negative_non_literal_null_is_not_called_not_null(self) -> None:
+        """null=ALLOW_NULL cannot be resolved statically, so no NOT NULL claim."""
+        rules = self._add_field_findings("models.BooleanField(null=ALLOW_NULL)")
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
     def test_negative_initial_migration_is_safe(self) -> None:
         """Rule 1 only fires when the table is already populated
         (heuristic: not the first migration in its app)."""
