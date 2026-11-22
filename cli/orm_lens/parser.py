@@ -1329,6 +1329,13 @@ _MODEL_ROOT_TAIL = re.compile(
     r"|PolymorphicModel|MPTTModel)$"
 )
 _DJANGO_MODEL_MODULE = re.compile(r"^django\.db\.models(\.base)?$")
+_THIRD_PARTY_MODEL_ROOTS: dict[str, tuple[str, ...]] = {
+    "solo.models": ("SingletonModel",),
+    "tree_queries.models": ("TreeNode",),
+    "treebeard.mp_tree": ("MP_Node",),
+    "treebeard.ns_tree": ("NS_Node",),
+    "treebeard.al_tree": ("AL_Node",),
+}
 
 
 def _has_model_ancestry(
@@ -1947,6 +1954,8 @@ class _WorkspaceResolver:
             _DJANGO_MODEL_MODULE.match(module)
             or module in ("model_utils.models", "polymorphic.models", "mptt.models")
         ):
+            return module, target_name
+        if target_name in _THIRD_PARTY_MODEL_ROOTS.get(module, ()):
             return module, target_name
 
         for candidate in _module_files(module, str(path), self.root):
