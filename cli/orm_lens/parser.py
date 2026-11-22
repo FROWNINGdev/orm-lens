@@ -70,6 +70,11 @@ CLASS_START_RE = re.compile(
     r"^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\("
 )
 
+# A call in a base list, e.g. ``ExportModelOperationsMixin("recipe")`` — its
+# result can't be resolved statically, so ``_read_multiline_class`` drops the
+# call and keeps the other bases (issue #335).
+_CALL_IN_BASES_RE = re.compile(r"[A-Za-z_][\w.]*\s*\([^()]*\)")
+
 NON_MODEL_TAIL = re.compile(
     r"^(ModelAdmin|ModelForm|ModelSerializer|ModelChoiceField|"
     r"ModelMultipleChoiceField|Serializer|Form|Admin|View|ViewSet|"
@@ -142,7 +147,17 @@ def _read_multiline_class(lines: Sequence[str], start: int):
         if i > start:
             buffer += " " + src
         if saw_open and depth == 0:
-            m = CLASS_RE.match(buffer)
+            head, _paren, rest = buffer.partition("(")
+            while True:
+                # ``Mixin("label")`` in a base list is a call whose result
+                # can't be resolved statically; drop it, keep the other bases.
+                # The loop strips nested calls from the inside out, so
+                # ``Mixin(get_label("x"))`` is dropped in two passes.
+                stripped = _CALL_IN_BASES_RE.sub("", rest)
+                if stripped == rest:
+                    break
+                rest = stripped
+            m = CLASS_RE.match(head + "(" + rest)
             if m:
                 return m, i
             return None, i
