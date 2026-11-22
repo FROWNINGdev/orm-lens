@@ -1378,10 +1378,11 @@ class MigrationRiskAnalyzer:
             # may be evaluated per row (PostgreSQL evaluates volatile
             # defaults for each existing row), so it is uncertain rather than
             # a certain collision. A literal ``db_default=True`` still copies
-            # one value to every row and stays critical.
-            db_default_is_expression = isinstance(db_default_node, ast.Call) and (
-                not has_default or default_is_none
-            )
+            # one value to every row and stays critical. When adding the
+            # column, Django's schema editor uses ``db_default`` and ignores
+            # any Python ``default=``, so the Python default does not matter
+            # here.
+            db_default_is_expression = isinstance(db_default_node, ast.Call)
             if db_default_is_expression:
                 confidence: Confidence = "medium"
                 severity: Severity = "warning"
