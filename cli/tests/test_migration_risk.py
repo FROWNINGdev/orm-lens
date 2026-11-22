@@ -206,6 +206,19 @@ class AddFieldNotNullTest(unittest.TestCase):
         self.assertEqual(unique[0].confidence, "medium")
         self.assertEqual(unique[0].severity, "warning")
 
+    def test_db_default_expression_wins_over_python_default(self) -> None:
+        """ADD COLUMN uses db_default and ignores the Python default, so a
+        literal default= must not turn RandomUUID() into a critical finding."""
+        rules = self._add_field_findings(
+            "models.UUIDField(null=True, unique=True, "
+            "default='00000000-0000-0000-0000-000000000001', "
+            "db_default=RandomUUID())"
+        )
+        unique = rules.get("add_field_unique_no_row_default", [])
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0].confidence, "medium")
+        self.assertEqual(unique[0].severity, "warning")
+
     def test_negative_unique_nullable_with_db_default_none(self) -> None:
         """db_default=None still fills existing rows with NULL."""
         rules = self._add_field_findings(
