@@ -195,6 +195,17 @@ class AddFieldNotNullTest(unittest.TestCase):
                 rules = self._add_field_findings(field_src)
                 self.assertIn("add_field_unique_no_row_default", rules)
 
+    def test_unique_nullable_with_db_default_expression_is_uncertain(self) -> None:
+        """A database expression may be evaluated per row (e.g. RandomUUID()),
+        so it is a medium warning, not a certain critical collision."""
+        rules = self._add_field_findings(
+            "models.UUIDField(null=True, unique=True, db_default=RandomUUID())"
+        )
+        unique = rules.get("add_field_unique_no_row_default", [])
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0].confidence, "medium")
+        self.assertEqual(unique[0].severity, "warning")
+
     def test_negative_unique_nullable_with_db_default_none(self) -> None:
         """db_default=None still fills existing rows with NULL."""
         rules = self._add_field_findings(
