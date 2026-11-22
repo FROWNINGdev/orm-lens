@@ -1374,9 +1374,25 @@ class MigrationRiskAnalyzer:
             # unique values per row → medium. Anything else (literal or
             # missing) will fail on duplicates → high.
             default_is_callable = isinstance(default_node, (ast.Name, ast.Attribute))
-            if default_is_callable:
+            # A database expression in ``db_default=`` (e.g. ``RandomUUID()``)
+            # may be evaluated per row (PostgreSQL evaluates volatile
+            # defaults for each existing row), so it is uncertain rather than
+            # a certain collision. A literal ``db_default=True`` still copies
+            # one value to every row and stays critical.
+            db_default_is_expression = isinstance(db_default_node, ast.Call) and (
+                not has_default or default_is_none
+            )
+            if db_default_is_expression:
                 confidence: Confidence = "medium"
                 severity: Severity = "warning"
+                desc = (
+                    f"Adds UNIQUE column '{name}' to '{model}' with a database "
+                    f"expression as db_default; verify it produces unique "
+                    f"values per row."
+                )
+            elif default_is_callable:
+                confidence = "medium"
+                severity = "warning"
                 desc = (
                     f"Adds UNIQUE column '{name}' to '{model}' with a callable "
                     f"default; verify it produces unique values per row."
