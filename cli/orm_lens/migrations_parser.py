@@ -559,7 +559,8 @@ _EMPTY_STRING_FIELDS = frozenset(
     }
 )
 
-_AUTO_NOW_FIELDS = frozenset({"DateField", "DateTimeField", "TimeField"})
+# Suffixes, so subclasses like django-extensions' ModificationDateTimeField match too.
+_AUTO_NOW_SUFFIXES = ("DateField", "DateTimeField", "TimeField")
 
 _STRING_FIELD_SUFFIXES = ("CharField", "TextField", "SlugField", "EmailField", "URLField")
 
@@ -595,7 +596,7 @@ def _has_effective_default(field_call: ast.Call, field_type: str) -> bool:
         return True
     if _kwarg_literal(field_call, "blank") is True and _is_string_field(field_call, field_type):
         return True
-    return field_type in _AUTO_NOW_FIELDS and (
+    return field_type.endswith(_AUTO_NOW_SUFFIXES) and (
         _kwarg_literal(field_call, "auto_now") is True
         or _kwarg_literal(field_call, "auto_now_add") is True
     )

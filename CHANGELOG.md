@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **migration-risk: `auto_now` on a date field subclass has a default**
+  ([#339](https://github.com/FROWNINGdev/orm-lens/issues/339)).
+  `AddField` with django-extensions' `ModificationDateTimeField(auto_now=True)`
+  or `CreationDateTimeField(auto_now_add=True)` was reported as a critical
+  NOT NULL column without a default. Django fills existing rows with the
+  current time for these, as it does for `DateTimeField`. Any field whose name
+  ends in `DateField`, `DateTimeField` or `TimeField` now counts.
+
 ## [py-1.18.2] - 2026-11-22
 
 > Drift understands MPTT, parent links and hand-written migrations.

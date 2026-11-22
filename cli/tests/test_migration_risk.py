@@ -848,6 +848,8 @@ class RealWorldPrecisionTest(unittest.TestCase):
             "LowercaseSlugField(blank=True)",
             "models.DateTimeField(auto_now_add=True)",
             "models.DateField(auto_now=True)",
+            "django_extensions.db.fields.ModificationDateTimeField(auto_now=True, verbose_name='modified')",
+            "django_extensions.db.fields.CreationDateTimeField(auto_now_add=True)",
             "models.IntegerField(db_default=0)",
         ):
             self.assertNotIn("add_field_not_null_no_default", self._rules(self._add(field)), field)
@@ -856,6 +858,8 @@ class RealWorldPrecisionTest(unittest.TestCase):
         for field in (
             "models.CharField(max_length=50)",
             "models.IntegerField(blank=True)",  # no empty string for integers
+            "django_extensions.db.fields.ModificationDateTimeField()",  # no auto_now
+            "models.IntegerField(auto_now=True)",  # auto_now only fills date fields
             "models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='orders.order')",
         ):
             rules = self._rules(self._add(field))
