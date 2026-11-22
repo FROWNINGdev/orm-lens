@@ -118,6 +118,27 @@ def _collect_receiver_aliases(tree: ast.AST) -> set[str]:
     return aliases
 
 
+def _collect_model_signal_aliases(tree: ast.Module) -> dict[str, bool]:
+    """Classify aliases from direct module-level Django signal imports."""
+    aliases: dict[str, bool] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or node.level != 0:
+            continue
+        if node.module not in (
+            "django.db.models.signals",
+            "django.contrib.auth.signals",
+            "django.core.signals",
+            "django.test.signals",
+        ):
+            continue
+        for alias in node.names:
+            if alias.asname is not None:
+                aliases[alias.asname] = (
+                    node.module == "django.db.models.signals" and alias.name in _MODEL_SIGNALS
+                )
+    return aliases
+
+
 def _extract_receiver_call(
     dec: ast.AST, receiver_aliases: set[str] | frozenset[str] | None = None
 ) -> ast.Call | None:
@@ -334,6 +355,8 @@ def signal_graph(
         handler: str,
         file: str,
         via: str,
+        *,
+        model_signal_aliases: dict[str, bool],
     ) -> None:
         sender, note = _resolve_sender(sender_raw, model_index, user_model_name)
         edge: dict[str, Any] = {
@@ -343,7 +366,8 @@ def signal_graph(
             "file": file,
         }
         signal_tail = signal_name.rsplit(".", 1)[-1]
-        if sender_raw is None and signal_tail in _MODEL_SIGNALS:
+        is_model_signal = model_signal_aliases.get(signal_name, signal_tail in _MODEL_SIGNALS)
+        if sender_raw is None and is_model_signal:
             edge["note"] = "no sender = fires for all models"
         elif note:
             edge["note"] = note
@@ -360,6 +384,7 @@ def signal_graph(
     # Pass 2 — decorators, .connect() and .send() calls.
     for py, tree, module_path in parsed:
         receiver_aliases = _collect_receiver_aliases(tree)
+        model_signal_aliases = _collect_model_signal_aliases(tree)
         # Walk all functions (module-level + nested) for @receiver decorators.
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -378,6 +403,7 @@ def signal_graph(
                             handler_fqn,
                             _rel(root_path, py, node.lineno),
                             "@receiver",
+                            model_signal_aliases=model_signal_aliases,
                         )
 
             if isinstance(node, ast.Call):
@@ -392,6 +418,7 @@ def signal_graph(
                         handler,
                         _rel(root_path, py, node.lineno),
                         ".connect()",
+                        model_signal_aliases=model_signal_aliases,
                     )
                     continue
 

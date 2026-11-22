@@ -101,6 +101,76 @@ class SignalGraphTest(unittest.TestCase):
                 self.assertEqual(edge.get("builtin", False), builtin[edge["signal"]])
                 self.assertNotIn("note", edge)
 
+    def test_senderless_signal_aliases_use_the_imported_signal_for_the_note(self) -> None:
+        cases = {
+            "audit": (
+                "from django.db.models.signals import post_save as saved",
+                "saved", "no sender = fires for all models",
+            ),
+            "accounts": (
+                "from django.contrib.auth.signals import user_logged_in as post_save",
+                "post_save", None,
+            ),
+            "setup": (
+                "from django.db.models.signals import pre_migrate as migrating",
+                "migrating", None,
+            ),
+            "orders": ("from events import post_save as saved", "saved", None),
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            for app, (import_line, signal, _) in cases.items():
+                _write(
+                    root / app / "signals.py",
+                    f"{import_line}\n"
+                    "from django.dispatch import receiver\n\n"
+                    f"@receiver({signal})\n"
+                    "def audit(sender, **kwargs):\n"
+                    "    pass\n",
+                )
+            result = signal_graph(str(root))
+
+        edges = {edge["handler"]: edge for edge in result["edges"]}
+        self.assertCountEqual(
+            [edge["handler"] for edge in result["edges"]], [f"{app}.signals.audit" for app in cases]
+        )
+        self.assertEqual(result["orphan_handlers"], [])
+        for app, (_, signal, note) in cases.items():
+            with self.subTest(app=app):
+                edge = edges[f"{app}.signals.audit"]
+                self.assertEqual(edge["signal"], signal)
+                self.assertIsNone(edge["sender"])
+                if note is None:
+                    self.assertNotIn("note", edge)
+                else:
+                    self.assertEqual(edge.get("note"), note)
+
+    def test_receiver_with_aliased_model_signal_keeps_explicit_senders(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_miniapp(root)
+            _write(
+                root / "audit" / "signals.py",
+                "from django.db.models.signals import post_save as saved\n"
+                "from django.dispatch import receiver\n"
+                "from orders.models import Order\n\n"
+                "@receiver(saved, sender=Order)\n"
+                "def log_order(sender, **kwargs):\n"
+                "    pass\n\n"
+                "@receiver(saved, sender='Ghost')\n"
+                "def log_ghost(sender, **kwargs):\n"
+                "    pass\n",
+            )
+            result = signal_graph(str(root))
+
+        self.assertCountEqual([edge["signal"] for edge in result["edges"]], ["saved", "saved"])
+        edges = {edge["sender"]: edge for edge in result["edges"]}
+        self.assertEqual(set(edges), {"orders.Order", "Ghost"})
+        self.assertNotIn("note", edges["orders.Order"])
+        self.assertEqual(edges["Ghost"]["note"], "sender model not found in workspace")
+        self.assertEqual([row["handler"] for row in result["orphan_handlers"]], ["audit.signals.log_ghost"])
+
     def test_orphan_handler_when_sender_missing_from_workspace(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
