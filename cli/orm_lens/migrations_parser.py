@@ -69,7 +69,8 @@ def _find_migrations_dirs(root: str, app_label: str) -> list[Path]:
 
     A workspace may contain the same app label in multiple locations
     (mono-repos, vendored copies). We union them so the caller sees every
-    migration file matching the label.
+    migration file matching the label. An app is also found by the label its
+    ``apps.py`` declares, so ``misago_threads`` finds ``threads/migrations``.
     """
     matches: list[Path] = []
     root_path = Path(root)
@@ -81,7 +82,7 @@ def _find_migrations_dirs(root: str, app_label: str) -> list[Path]:
         ]
         if os.path.basename(dirpath) == "migrations":
             parent = os.path.basename(os.path.dirname(dirpath))
-            if parent == app_label:
+            if parent == app_label or _configured_app_label(Path(dirpath).parent) == app_label:
                 matches.append(Path(dirpath))
     return matches
 
@@ -420,8 +421,16 @@ def describe_migration_dependency(app_label: str, root: str) -> dict[str, Any]:
             migrations.append(parsed)
 
     migrations.sort(key=lambda m: m["name"])
+    # Dependency tuples carry the app label, which AppConfig.label can set
+    # apart from the folder name. apps.py comes first: the tuples alone stay
+    # silent when another app has a migration of the same name.
+    label = (
+        _configured_app_label(dirs[0].parent)
+        or _resolve_app_label({m["name"]: m["dependencies"] for m in migrations}, app_label)
+        or app_label
+    )
     roots, leaves, cross_app_deps = _compute_roots_leaves_cross(
-        _collapse_squashed(migrations, app_label), app_label
+        _collapse_squashed(migrations, label), label
     )
 
     return {
