@@ -601,6 +601,31 @@ def _has_effective_default(field_call: ast.Call, field_type: str) -> bool:
     )
 
 
+# Fields that are nullable by definition. ``NullBooleanField.__init__`` sets
+# ``null=True`` itself, so migrations never write the keyword for it. Django
+# 4.0 removed the field from models but keeps it for old migrations.
+_NULLABLE_BY_DEFINITION = frozenset({"NullBooleanField"})
+
+
+def _is_nullable(field_call: ast.Call, field_type: str) -> bool:
+    """True when the column accepts NULL: ``null=True`` or a nullable-by-definition field."""
+    return (
+        _kwarg_literal(field_call, "null") is True
+        or field_type in _NULLABLE_BY_DEFINITION
+    )
+
+
+def _is_not_null(field_call: ast.Call, field_type: str) -> bool:
+    """True when the column is NOT NULL: ``null=False`` or no ``null=`` at all.
+
+    A ``null=`` that is not a literal (a variable, a call) is neither, as before.
+    """
+    null_val = _kwarg_literal(field_call, "null")
+    return (null_val is False or null_val is None) and (
+        field_type not in _NULLABLE_BY_DEFINITION
+    )
+
+
 def _migration_prefix(name: str) -> int:
     """Return the numeric prefix of a migration filename stem, or -1."""
     m = _MIGRATION_PREFIX_RE.match(name)
@@ -1260,7 +1285,6 @@ class MigrationRiskAnalyzer:
         if field_call is None:
             return
 
-        null_val = _kwarg_literal(field_call, "null")
         has_default = _has_kwarg(field_call, "default")
         unique_val = _kwarg_literal(field_call, "unique")
         field_type = _field_type(field_call) or "Field"
@@ -1273,8 +1297,9 @@ class MigrationRiskAnalyzer:
         # Rule 1: NOT NULL with no default on a populated table.
         # ``null=True`` explicit means nullable → no risk.
         # No null kwarg means default False (NOT NULL) → risk if no default and
-        # the table already exists.
-        is_not_null = null_val is False or null_val is None
+        # the table already exists. NullBooleanField is the exception: it is
+        # nullable without the keyword (see _is_not_null).
+        is_not_null = _is_not_null(field_call, field_type)
         if (
             is_not_null
             and not has_default
@@ -1331,7 +1356,9 @@ class MigrationRiskAnalyzer:
         default_is_none = (
             isinstance(default_node, ast.Constant) and default_node.value is None
         )
-        nulls_fill_rows = null_val is True and (not has_default or default_is_none)
+        nulls_fill_rows = _is_nullable(field_call, field_type) and (
+            not has_default or default_is_none
+        )
         if unique_val is True and populated and not nulls_fill_rows:
             default_node = _get_kwarg(field_call, "default")
             # A callable default (e.g. ``default=uuid.uuid4``) can produce
