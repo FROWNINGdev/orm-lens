@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **migration-risk: `NullBooleanField` is nullable without `null=True`**
+  ([#338](https://github.com/FROWNINGdev/orm-lens/issues/338)).
+  `NullBooleanField.__init__` sets `null=True` itself, so migrations never
+  write the keyword, and `AddField(field=models.NullBooleanField())` was
+  reported as a critical NOT NULL column. Nullability is now decided by one
+  helper that knows this field, also for the unique-column rule, where a
+  `NullBooleanField(unique=True)` fills existing rows with NULL and is safe.
+
 ## [py-1.18.2] - 2026-11-22
 
 > Drift understands MPTT, parent links and hand-written migrations.
