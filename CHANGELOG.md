@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **parser: keep a model whose base list holds a call**
+  ([#335](https://github.com/FROWNINGdev/orm-lens/issues/335)).
+  `class Comment(ExportModelOperationsMixin("comment"), models.Model)` was
+  dropped because the class-header regex only reads bases up to the first
+  `)`. Calls in the base list are now stripped before matching, so the other
+  bases still decide whether the class is a model; a call as the only base
+  is still not a model. Python and TypeScript parsers.
+
 ## [py-1.18.2] - 2026-11-22
 
 > Drift understands MPTT, parent links and hand-written migrations.
