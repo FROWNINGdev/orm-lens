@@ -209,6 +209,77 @@ class SignalGraphTest(unittest.TestCase):
                 self.assertNotIn("note", edge)
                 self.assertNotIn("builtin", edge)
 
+    def test_relative_star_imports_resolve_custom_model_named_signals(self) -> None:
+        events = "from django.dispatch import Signal\npost_save = Signal()\n"
+        sources = {
+            "toplevel.py": "from .events import *\n",
+            "pkg/sub/signals.py": "from .events import *\n",
+            "pkg/sub/deep.py": "from ..events import *\n",
+            "pkg/__init__.py": "from .events import *\n",
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "events.py", events)
+            _write(root / "pkg" / "events.py", events)
+            _write(root / "pkg" / "sub" / "events.py", events)
+            for rel, star in sources.items():
+                _write(
+                    root / rel,
+                    f"{star}from django.dispatch import receiver\n\n"
+                    "@receiver(post_save)\n"
+                    "def audit(sender, **kwargs):\n"
+                    "    pass\n",
+                )
+            result = signal_graph(str(root))
+
+        self.assertEqual(len(result["edges"]), len(sources))
+        for edge in result["edges"]:
+            with self.subTest(file=edge["file"]):
+                self.assertNotIn("note", edge)
+                self.assertNotIn("builtin", edge)
+
+    def test_relative_star_import_beyond_the_workspace_is_not_resolved(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            _write(
+                root / "pkg" / "signals.py",
+                "from ...events import *\n"
+                "from django.dispatch import receiver\n\n"
+                "@receiver(post_save)\n"
+                "def audit(sender, **kwargs):\n"
+                "    pass\n",
+            )
+            result = signal_graph(str(root))
+
+        [edge] = result["edges"]
+        self.assertEqual(edge["note"], "no sender = fires for all models")
+
+    def test_star_imports_bind_only_the_names_their_module_defines(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            _write(
+                root / "audit" / "signals.py",
+                "from django.db.models.signals import *\n"
+                "from events import *\n"
+                "from django.dispatch import receiver\n\n"
+                "@receiver(post_save)\n"
+                "def on_custom(sender, **kwargs):\n"
+                "    pass\n\n"
+                "@receiver(pre_save)\n"
+                "def on_django(sender, **kwargs):\n"
+                "    pass\n",
+            )
+            result = signal_graph(str(root))
+
+        edges = {edge["handler"]: edge for edge in result["edges"]}
+        custom, django = edges["audit.signals.on_custom"], edges["audit.signals.on_django"]
+        self.assertNotIn("note", custom)
+        self.assertNotIn("builtin", custom)
+        self.assertEqual(django["note"], "no sender = fires for all models")
+        self.assertTrue(django["builtin"])
+
     def test_imported_model_signals_keep_the_all_models_note(self) -> None:
         cases = {
             "plain": ("from django.db.models.signals import post_save\n", "post_save"),

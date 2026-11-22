@@ -148,7 +148,8 @@ def _collect_signal_origins(
     The value is the dotted path the name was imported from (so
     ``from django.db.models.signals import post_save as saved`` maps
     ``saved`` to ``django.db.models.signals.post_save``), or ``None`` for a
-    name bound locally: assigned, defined, or imported relatively. Later
+    name bound locally: assigned, defined, or imported from an unreadable path.
+    Relative imports are resolved to the workspace module they name. Later
     bindings replace earlier ones, as they do at runtime, so a ``Signal()``
     called ``post_save`` is told apart from Django's. Names that are not
     bound at module level are absent; the caller falls back to the signal's
@@ -188,8 +189,8 @@ def _collect_signal_origins(
                                 origins[name] = f"{module}.{name}"
                         elif module is not None:
                             for name in signal_defs_by_module.get(module, {}):
-                                origins[name] = None if stmt.level else f"{module}.{name}"
-                    elif module is None or stmt.level:
+                                origins[name] = f"{module}.{name}"
+                    elif module is None:
                         origins[alias.asname or alias.name] = None
                     else:
                         origins[alias.asname or alias.name] = f"{module}.{alias.name}"
