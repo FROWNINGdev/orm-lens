@@ -185,6 +185,23 @@ class AddFieldNotNullTest(unittest.TestCase):
         self.assertNotIn("add_field_unique_no_row_default", rules)
         self.assertNotIn("add_field_not_null_no_default", rules)
 
+    def test_positive_unique_nullable_with_db_default_still_flagged(self) -> None:
+        """db_default fills existing rows with one value, not NULL, so they collide."""
+        for field_src in (
+            "models.NullBooleanField(unique=True, db_default=True)",
+            "models.BooleanField(null=True, unique=True, db_default=True)",
+        ):
+            with self.subTest(field_src=field_src):
+                rules = self._add_field_findings(field_src)
+                self.assertIn("add_field_unique_no_row_default", rules)
+
+    def test_negative_unique_nullable_with_db_default_none(self) -> None:
+        """db_default=None still fills existing rows with NULL."""
+        rules = self._add_field_findings(
+            "models.BooleanField(null=True, unique=True, db_default=None)"
+        )
+        self.assertNotIn("add_field_unique_no_row_default", rules)
+
     def test_negative_initial_migration_is_safe(self) -> None:
         """Rule 1 only fires when the table is already populated
         (heuristic: not the first migration in its app)."""
