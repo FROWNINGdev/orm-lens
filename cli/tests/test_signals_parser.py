@@ -210,23 +210,27 @@ class SignalGraphTest(unittest.TestCase):
                 self.assertNotIn("builtin", edge)
 
     def test_relative_star_imports_resolve_custom_model_named_signals(self) -> None:
-        events = "from django.dispatch import Signal\npost_save = Signal()\n"
+        def events(name: str) -> str:
+            return f"from django.dispatch import Signal\n{name} = Signal()\n"
+
+        # Each events module defines a different name, so a star import only
+        # counts as custom when it resolves to the right module.
         sources = {
-            "toplevel.py": "from .events import *\n",
-            "pkg/sub/signals.py": "from .events import *\n",
-            "pkg/sub/deep.py": "from ..events import *\n",
-            "pkg/__init__.py": "from .events import *\n",
+            "toplevel.py": ("from .events import *\n", "post_save"),
+            "pkg/sub/signals.py": ("from .events import *\n", "post_delete"),
+            "pkg/sub/deep.py": ("from ..events import *\n", "pre_save"),
+            "pkg/__init__.py": ("from .events import *\n", "pre_save"),
         }
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write(root / "events.py", events)
-            _write(root / "pkg" / "events.py", events)
-            _write(root / "pkg" / "sub" / "events.py", events)
-            for rel, star in sources.items():
+            _write(root / "events.py", events("post_save"))
+            _write(root / "pkg" / "events.py", events("pre_save"))
+            _write(root / "pkg" / "sub" / "events.py", events("post_delete"))
+            for rel, (star, signal) in sources.items():
                 _write(
                     root / rel,
                     f"{star}from django.dispatch import receiver\n\n"
-                    "@receiver(post_save)\n"
+                    f"@receiver({signal})\n"
                     "def audit(sender, **kwargs):\n"
                     "    pass\n",
                 )
@@ -238,13 +242,21 @@ class SignalGraphTest(unittest.TestCase):
                 self.assertNotIn("note", edge)
                 self.assertNotIn("builtin", edge)
 
-    def test_relative_star_import_beyond_the_workspace_is_not_resolved(self) -> None:
+    def test_relative_imports_beyond_the_workspace_are_not_resolved(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
             _write(
-                root / "pkg" / "signals.py",
+                root / "pkg" / "starred.py",
                 "from ...events import *\n"
+                "from django.dispatch import receiver\n\n"
+                "@receiver(post_save)\n"
+                "def audit(sender, **kwargs):\n"
+                "    pass\n",
+            )
+            _write(
+                root / "pkg" / "renamed.py",
+                "from .... import events as post_save\n"
                 "from django.dispatch import receiver\n\n"
                 "@receiver(post_save)\n"
                 "def audit(sender, **kwargs):\n"
@@ -252,8 +264,11 @@ class SignalGraphTest(unittest.TestCase):
             )
             result = signal_graph(str(root))
 
-        [edge] = result["edges"]
-        self.assertEqual(edge["note"], "no sender = fires for all models")
+        edges = {edge["file"].split(":")[0]: edge for edge in result["edges"]}
+        # An unreadable star import binds nothing, so the spelling decides.
+        self.assertEqual(edges["pkg/starred.py"]["note"], "no sender = fires for all models")
+        # An unreadable plain import still binds its name to something local.
+        self.assertNotIn("note", edges["pkg/renamed.py"])
 
     def test_star_imports_bind_only_the_names_their_module_defines(self) -> None:
         with TemporaryDirectory() as tmp:
