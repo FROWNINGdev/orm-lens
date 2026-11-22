@@ -142,6 +142,49 @@ class AddFieldNotNullTest(unittest.TestCase):
                 "add_field_not_null_no_default", _by_rule(findings)
             )
 
+    def _add_field_findings(self, field_src: str) -> dict[str, list[MigrationRisk]]:
+        """Run the analyzer on 0001 (create Build) + 0002 (AddField ``field_src``)."""
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "builds"
+            _write(
+                app, "0001_initial",
+                "from django.db import migrations, models\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = []\n"
+                "    operations = [migrations.CreateModel(name='Build', fields=[])]\n",
+            )
+            _write(
+                app, "0002_build_cold_storage",
+                "import django.db.models\n"
+                "from django.db import migrations, models\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = [('builds', '0001_initial')]\n"
+                "    operations = [migrations.AddField(model_name='build',\n"
+                f"        name='cold_storage', field={field_src})]\n",
+            )
+            return _by_rule(analyze_migration_risks(tmp, current_schema=_empty_schema()))
+
+    def test_negative_null_boolean_field_is_nullable_by_definition(self) -> None:
+        """#338: NullBooleanField sets null=True itself; migrations never write it."""
+        rules = self._add_field_findings(
+            "models.NullBooleanField(help_text='Build steps stored outside the database.')"
+        )
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
+    def test_negative_null_boolean_field_dotted_path(self) -> None:
+        rules = self._add_field_findings("django.db.models.NullBooleanField()")
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
+    def test_positive_boolean_field_without_default_still_flagged(self) -> None:
+        rules = self._add_field_findings("models.BooleanField()")
+        self.assertIn("add_field_not_null_no_default", rules)
+
+    def test_negative_unique_null_boolean_field_fills_rows_with_null(self) -> None:
+        """NULLs never collide in a unique constraint, same as unique=True, null=True."""
+        rules = self._add_field_findings("models.NullBooleanField(unique=True)")
+        self.assertNotIn("add_field_unique_no_row_default", rules)
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
     def test_negative_initial_migration_is_safe(self) -> None:
         """Rule 1 only fires when the table is already populated
         (heuristic: not the first migration in its app)."""
