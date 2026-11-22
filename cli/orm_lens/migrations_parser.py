@@ -1356,8 +1356,17 @@ class MigrationRiskAnalyzer:
         default_is_none = (
             isinstance(default_node, ast.Constant) and default_node.value is None
         )
-        nulls_fill_rows = _is_nullable(field_call, field_type) and (
-            not has_default or default_is_none
+        # ``db_default=`` fills existing rows with that value instead of NULL
+        # (only ``db_default=None`` still means NULL), so it removes the
+        # exemption just like a non-None ``default=``.
+        db_default_node = _get_kwarg(field_call, "db_default")
+        db_default_is_none_or_absent = db_default_node is None or (
+            isinstance(db_default_node, ast.Constant) and db_default_node.value is None
+        )
+        nulls_fill_rows = (
+            _is_nullable(field_call, field_type)
+            and (not has_default or default_is_none)
+            and db_default_is_none_or_absent
         )
         if unique_val is True and populated and not nulls_fill_rows:
             default_node = _get_kwarg(field_call, "default")
