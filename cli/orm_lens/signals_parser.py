@@ -28,13 +28,19 @@ from typing import Any
 
 from .models import WorkspaceIndex, find_user_model
 
-# Django built-in signals we know about — used for tagging edges as "django-native".
-_BUILTIN_SIGNALS = frozenset(
+# Only model signals can fire for all models when no sender is specified.
+_MODEL_SIGNALS = frozenset(
     {
         "pre_init", "post_init",
         "pre_save", "post_save",
         "pre_delete", "post_delete",
         "m2m_changed",
+    }
+)
+
+# Django built-in signals we know about — used for tagging edges as "django-native".
+_BUILTIN_SIGNALS = _MODEL_SIGNALS | frozenset(
+    {
         "pre_migrate", "post_migrate",
         "request_started", "request_finished", "got_request_exception",
         "setting_changed",
@@ -227,7 +233,7 @@ def _resolve_sender(
 ) -> tuple[str | None, str | None]:
     """Turn a raw sender token into (canonical, note).
 
-    * ``None`` → (None, None) → fires for all models (caller adds a note).
+    * ``None`` → (None, None) → no sender filter.
     * ``"Order"`` → look up in model_index; return (``"orders.Order"``, None)
       or (raw, "sender model not found in workspace") on miss.
     * dotted / string forms (``"orders.Order"``, ``"MyApp.Model"``) →
@@ -336,7 +342,8 @@ def signal_graph(
             "handler": handler,
             "file": file,
         }
-        if sender_raw is None:
+        signal_tail = signal_name.rsplit(".", 1)[-1]
+        if sender_raw is None and signal_tail in _MODEL_SIGNALS:
             edge["note"] = "no sender = fires for all models"
         elif note:
             edge["note"] = note
@@ -346,7 +353,7 @@ def signal_graph(
                     "reason": f"{via} but sender model not found in workspace",
                 }
             )
-        if signal_name in _BUILTIN_SIGNALS or signal_name.rsplit(".", 1)[-1] in _BUILTIN_SIGNALS:
+        if signal_tail in _BUILTIN_SIGNALS:
             edge["builtin"] = True
         edges.append(edge)
 

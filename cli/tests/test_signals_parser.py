@@ -75,6 +75,32 @@ class SignalGraphTest(unittest.TestCase):
             self.assertIsNone(edge["sender"])
             self.assertEqual(edge["note"], "no sender = fires for all models")
 
+    def test_non_model_signals_without_sender_have_no_note(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "accounts" / "signals.py",
+                "from django.contrib.auth.signals import user_logged_in\n"
+                "from django.db.models import signals\n"
+                "from django.dispatch import Signal, receiver\n\n"
+                "order_shipped = Signal()\n\n"
+                "@receiver(user_logged_in)\n"
+                "def audit_event(sender, **kwargs):\n"
+                "    pass\n\n"
+                "signals.pre_migrate.connect(audit_event)\n"
+                "order_shipped.connect(audit_event)\n",
+            )
+            result = signal_graph(str(root))
+
+        builtin = {"user_logged_in": True, "signals.pre_migrate": True, "order_shipped": False}
+        self.assertCountEqual([edge["signal"] for edge in result["edges"]], builtin)
+        self.assertEqual(result["orphan_handlers"], [])
+        for edge in result["edges"]:
+            with self.subTest(signal=edge["signal"]):
+                self.assertIsNone(edge["sender"])
+                self.assertEqual(edge.get("builtin", False), builtin[edge["signal"]])
+                self.assertNotIn("note", edge)
+
     def test_orphan_handler_when_sender_missing_from_workspace(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -219,6 +245,18 @@ class SignalConnectTest(unittest.TestCase):
         self.assertEqual(edges[0]["signal"], "models.signals.post_delete")
         self.assertEqual(edges[0]["handler"], "cleanup")
         self.assertEqual(edges[0]["sender"], "orders.Order")
+
+    def test_dotted_model_signal_without_sender_keeps_note(self) -> None:
+        edges = self._edges(
+            "from django.db import models\n\n"
+            "models.signals.post_save.connect(handlers.audit)\n"
+        )
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertEqual(edge["signal"], "models.signals.post_save")
+        self.assertIsNone(edge["sender"])
+        self.assertTrue(edge["builtin"])
+        self.assertEqual(edge["note"], "no sender = fires for all models")
 
     def test_connect_with_positional_sender(self) -> None:
         edges = self._edges(

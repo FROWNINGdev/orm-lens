@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **signals: show the all-models note only for model signals without a sender**
+  ([#340](https://github.com/FROWNINGdev/orm-lens/issues/340)). Auth, migration,
+  request, and custom signals no longer get this note just because they have no sender.
+
 ## [py-1.18.2] - 2026-11-22
 
 > Drift understands MPTT, parent links and hand-written migrations.
