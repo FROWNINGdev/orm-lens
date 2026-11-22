@@ -618,12 +618,14 @@ def _is_nullable(field_call: ast.Call, field_type: str) -> bool:
 def _is_not_null(field_call: ast.Call, field_type: str) -> bool:
     """True when the column is NOT NULL: ``null=False`` or no ``null=`` at all.
 
-    A ``null=`` that is not a literal (a variable, a call) is neither, as before.
+    A ``null=`` that is not a literal (a variable, a call) is neither: its
+    value is unknown here, so no NOT NULL finding is claimed for it.
     """
-    null_val = _kwarg_literal(field_call, "null")
-    return (null_val is False or null_val is None) and (
-        field_type not in _NULLABLE_BY_DEFINITION
-    )
+    if field_type in _NULLABLE_BY_DEFINITION:
+        return False
+    if not _has_kwarg(field_call, "null"):
+        return True
+    return _kwarg_literal(field_call, "null") is False
 
 
 def _migration_prefix(name: str) -> int:
@@ -1356,18 +1358,21 @@ class MigrationRiskAnalyzer:
         default_is_none = (
             isinstance(default_node, ast.Constant) and default_node.value is None
         )
-        # ``db_default=`` fills existing rows with that value instead of NULL
-        # (only ``db_default=None`` still means NULL), so it removes the
-        # exemption just like a non-None ``default=``.
+        # When ``db_default=`` is present, Django's schema editor fills
+        # existing rows from it and ignores any Python ``default=``. Rows get
+        # NULL only with ``db_default=None``; any other value replaces the
+        # NULL fill.
         db_default_node = _get_kwarg(field_call, "db_default")
-        db_default_is_none_or_absent = db_default_node is None or (
+        has_db_default = db_default_node is not None
+        db_default_is_none = (
             isinstance(db_default_node, ast.Constant) and db_default_node.value is None
         )
-        nulls_fill_rows = (
-            _is_nullable(field_call, field_type)
-            and (not has_default or default_is_none)
-            and db_default_is_none_or_absent
-        )
+        if has_db_default:
+            nulls_fill_rows = _is_nullable(field_call, field_type) and db_default_is_none
+        else:
+            nulls_fill_rows = _is_nullable(field_call, field_type) and (
+                not has_default or default_is_none
+            )
         if unique_val is True and populated and not nulls_fill_rows:
             default_node = _get_kwarg(field_call, "default")
             # A callable default (e.g. ``default=uuid.uuid4``) can produce
@@ -1391,7 +1396,7 @@ class MigrationRiskAnalyzer:
                     f"expression as db_default; verify it produces unique "
                     f"values per row."
                 )
-            elif default_is_callable:
+            elif default_is_callable and not has_db_default:
                 confidence = "medium"
                 severity = "warning"
                 desc = (
