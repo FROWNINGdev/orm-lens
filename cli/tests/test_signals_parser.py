@@ -171,6 +171,126 @@ class SignalGraphTest(unittest.TestCase):
         self.assertEqual(edges["Ghost"]["note"], "sender model not found in workspace")
         self.assertEqual([row["handler"] for row in result["orphan_handlers"]], ["audit.signals.log_ghost"])
 
+    def test_custom_signal_named_like_a_model_signal_has_no_all_models_note(self) -> None:
+        django_import = "from django.db.models.signals import post_save"
+        cases = {
+            # app: (signal as written, module source)
+            "local": ("post_save", "from django.dispatch import Signal\npost_save = Signal()\n"),
+            "annotated": ("post_save", "from django.dispatch import Signal\npost_save: Signal = Signal()\n"),
+            "imported": ("post_save", "from events import post_save\n"),
+            "relative": ("post_save", "from .events import post_save\n"),
+            "starred": ("post_save", "from events import *\n"),
+            "module": ("events.post_save", "import events\n"),
+            "package": ("events.post_save", "from . import events\n"),
+            "rebound": ("post_save", f"{django_import}\nfrom events import post_save\n"),
+            "copied": ("post_save", "from events import post_save as custom\npost_save = custom\n"),
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            for app, (signal, source) in cases.items():
+                _write(root / app / "__init__.py", "")
+                _write(root / app / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+                _write(
+                    root / app / "signals.py",
+                    f"{source}from django.dispatch import receiver\n\n"
+                    f"@receiver({signal})\n"
+                    "def audit(sender, **kwargs):\n"
+                    "    pass\n\n"
+                    f"{signal}.connect(audit)\n",
+                )
+            result = signal_graph(str(root))
+
+        self.assertEqual(result["orphan_handlers"], [])
+        self.assertEqual(len(result["edges"]), 2 * len(cases))
+        for edge in result["edges"]:
+            with self.subTest(handler=edge["handler"], file=edge["file"]):
+                self.assertIsNone(edge["sender"])
+                self.assertNotIn("note", edge)
+                self.assertNotIn("builtin", edge)
+
+    def test_imported_model_signals_keep_the_all_models_note(self) -> None:
+        cases = {
+            "plain": ("from django.db.models.signals import post_save\n", "post_save"),
+            "module": ("from django.db.models import signals\n", "signals.post_save"),
+            "dotted": ("from django.db import models\n", "models.signals.post_save"),
+            "package": ("import django.db.models.signals\n", "django.db.models.signals.post_save"),
+            "renamed": ("import django.db.models.signals as sg\n", "sg.post_save"),
+            "starred": ("from django.db.models.signals import *\n", "post_save"),
+            "unbound": ("", "post_save"),
+            "copied": (
+                "from django.db.models.signals import post_save as saved\npost_save = saved\n",
+                "post_save",
+            ),
+            "restored": (
+                "from django.dispatch import Signal\npost_save = Signal()\n"
+                "from django.db.models.signals import post_save\n",
+                "post_save",
+            ),
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # A custom ``post_save`` elsewhere must not change other modules.
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            for app, (source, signal) in cases.items():
+                _write(
+                    root / app / "signals.py",
+                    f"{source}from django.dispatch import receiver\n\n"
+                    f"@receiver({signal})\n"
+                    "def audit(sender, **kwargs):\n"
+                    "    pass\n\n"
+                    f"{signal}.connect(audit)\n",
+                )
+            result = signal_graph(str(root))
+
+        self.assertEqual(len(result["edges"]), 2 * len(cases))
+        for edge in result["edges"]:
+            with self.subTest(handler=edge["handler"], file=edge["file"]):
+                self.assertIsNone(edge["sender"])
+                self.assertEqual(edge["note"], "no sender = fires for all models")
+                self.assertTrue(edge["builtin"])
+
+    def test_custom_signal_named_like_a_model_signal_keeps_explicit_senders(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_miniapp(root)
+            _write(root / "events.py", "from django.dispatch import Signal\npost_save = Signal()\n")
+            _write(
+                root / "audit" / "signals.py",
+                "from django.dispatch import receiver\n"
+                "from events import post_save\n"
+                "from orders.models import Order\n\n"
+                "@receiver(post_save, sender=Order)\n"
+                "def log_order(sender, **kwargs):\n"
+                "    pass\n\n"
+                "@receiver(post_save, sender='Ghost')\n"
+                "def log_ghost(sender, **kwargs):\n"
+                "    pass\n\n"
+                "post_save.connect(log_order, Order)\n",
+            )
+            result = signal_graph(str(root))
+
+        by_handler = {(e["handler"], e["sender"]): e for e in result["edges"]}
+        self.assertEqual(
+            set(by_handler),
+            {
+                ("audit.signals.log_order", "orders.Order"),
+                ("audit.signals.log_ghost", "Ghost"),
+                ("log_order", "orders.Order"),
+            },
+        )
+        for key in (("audit.signals.log_order", "orders.Order"), ("log_order", "orders.Order")):
+            self.assertNotIn("note", by_handler[key])
+        self.assertEqual(
+            by_handler[("audit.signals.log_ghost", "Ghost")]["note"],
+            "sender model not found in workspace",
+        )
+        self.assertEqual(
+            [row["handler"] for row in result["orphan_handlers"]], ["audit.signals.log_ghost"]
+        )
+        for edge in result["edges"]:
+            self.assertNotIn("builtin", edge)
+
     def test_orphan_handler_when_sender_missing_from_workspace(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

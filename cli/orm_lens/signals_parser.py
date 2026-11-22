@@ -118,25 +118,134 @@ def _collect_receiver_aliases(tree: ast.AST) -> set[str]:
     return aliases
 
 
-def _collect_model_signal_aliases(tree: ast.Module) -> dict[str, bool]:
-    """Classify aliases from direct module-level Django signal imports."""
-    aliases: dict[str, bool] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.ImportFrom) or node.level != 0:
-            continue
-        if node.module not in (
-            "django.db.models.signals",
-            "django.contrib.auth.signals",
-            "django.core.signals",
-            "django.test.signals",
-        ):
-            continue
-        for alias in node.names:
-            if alias.asname is not None:
-                aliases[alias.asname] = (
-                    node.module == "django.db.models.signals" and alias.name in _MODEL_SIGNALS
-                )
-    return aliases
+_DJANGO_MODEL_SIGNALS_MODULE = "django.db.models.signals"
+
+
+def _import_target(
+    node: ast.ImportFrom, module_path: str, is_package: bool
+) -> str | None:
+    """Dotted module a ``from ... import`` reads from, or None if unreadable."""
+    if node.level == 0:
+        return node.module
+    package = module_path if is_package else module_path.rpartition(".")[0]
+    parts = package.split(".") if package else []
+    if node.level - 1 > len(parts):
+        return None
+    parts = parts[: len(parts) - (node.level - 1)]
+    if node.module:
+        parts.append(node.module)
+    return ".".join(parts)
+
+
+def _collect_signal_origins(
+    tree: ast.Module,
+    module_path: str,
+    is_package: bool,
+    signal_defs_by_module: dict[str, dict[str, str]],
+) -> dict[str, str | None]:
+    """Map each name bound at module level to where the object came from.
+
+    The value is the dotted path the name was imported from (so
+    ``from django.db.models.signals import post_save as saved`` maps
+    ``saved`` to ``django.db.models.signals.post_save``), or ``None`` for a
+    name bound locally: assigned, defined, or imported relatively. Later
+    bindings replace earlier ones, as they do at runtime, so a ``Signal()``
+    called ``post_save`` is told apart from Django's. Names that are not
+    bound at module level are absent; the caller falls back to the signal's
+    spelling for those.
+    """
+    origins: dict[str, str | None] = {}
+
+    def resolve(name: str) -> str | None:
+        head, _, rest = name.partition(".")
+        base = origins.get(head)
+        if base is None:
+            return None
+        return f"{base}.{rest}" if rest else base
+
+    def bind_stores(target: ast.AST | None) -> None:
+        if target is None:
+            return
+        for node in ast.walk(target):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                origins[node.id] = None
+
+    def visit(stmts: list[ast.stmt]) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    if alias.asname:
+                        origins[alias.asname] = alias.name
+                    else:
+                        head = alias.name.partition(".")[0]
+                        origins[head] = head
+            elif isinstance(stmt, ast.ImportFrom):
+                module = _import_target(stmt, module_path, is_package)
+                for alias in stmt.names:
+                    if alias.name == "*":
+                        if module == _DJANGO_MODEL_SIGNALS_MODULE:
+                            for name in _MODEL_SIGNALS:
+                                origins[name] = f"{module}.{name}"
+                        elif module is not None:
+                            for name in signal_defs_by_module.get(module, {}):
+                                origins[name] = None if stmt.level else f"{module}.{name}"
+                    elif module is None or stmt.level:
+                        origins[alias.asname or alias.name] = None
+                    else:
+                        origins[alias.asname or alias.name] = f"{module}.{alias.name}"
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                origins[stmt.name] = None
+            elif isinstance(stmt, ast.Assign):
+                value = _name_of(stmt.value)
+                target = stmt.targets[0]
+                if len(stmt.targets) == 1 and isinstance(target, ast.Name) and value is not None:
+                    origins[target.id] = resolve(value)
+                else:
+                    for target in stmt.targets:
+                        bind_stores(target)
+            elif isinstance(stmt, ast.AnnAssign):
+                bind_stores(stmt.target)
+            else:
+                if isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    bind_stores(stmt.target)
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    for item in stmt.items:
+                        bind_stores(item.optional_vars)
+                for field in ("body", "orelse", "finalbody"):
+                    visit(getattr(stmt, field, []))
+                for handler in getattr(stmt, "handlers", []):
+                    if handler.name:
+                        origins[handler.name] = None
+                    visit(handler.body)
+
+    visit(tree.body)
+    return origins
+
+
+def _classify_signal(
+    signal_name: str, origins: dict[str, str | None]
+) -> tuple[bool, bool]:
+    """Return ``(is_model_signal, is_builtin)`` for a signal as written.
+
+    A name or module bound at module level is judged by where it came from,
+    so a custom ``post_save`` is neither. A name that is not bound there
+    (a function-local import, or a star import from a module we cannot
+    read) is judged by its spelling.
+    """
+    head, _, rest = signal_name.partition(".")
+    tail = signal_name.rsplit(".", 1)[-1]
+    if head not in origins:
+        return tail in _MODEL_SIGNALS, tail in _BUILTIN_SIGNALS
+    base = origins[head]
+    if base is None:
+        return False, False
+    origin = f"{base}.{rest}" if rest else base
+    origin_tail = origin.rsplit(".", 1)[-1]
+    is_django = origin.startswith("django.")
+    return (
+        origin.startswith(_DJANGO_MODEL_SIGNALS_MODULE + ".") and origin_tail in _MODEL_SIGNALS,
+        is_django and origin_tail in _BUILTIN_SIGNALS,
+    )
 
 
 def _extract_receiver_call(
@@ -356,7 +465,7 @@ def signal_graph(
         file: str,
         via: str,
         *,
-        model_signal_aliases: dict[str, bool],
+        origins: dict[str, str | None],
     ) -> None:
         sender, note = _resolve_sender(sender_raw, model_index, user_model_name)
         edge: dict[str, Any] = {
@@ -365,8 +474,7 @@ def signal_graph(
             "handler": handler,
             "file": file,
         }
-        signal_tail = signal_name.rsplit(".", 1)[-1]
-        is_model_signal = model_signal_aliases.get(signal_name, signal_tail in _MODEL_SIGNALS)
+        is_model_signal, is_builtin = _classify_signal(signal_name, origins)
         if sender_raw is None and is_model_signal:
             edge["note"] = "no sender = fires for all models"
         elif note:
@@ -377,14 +485,16 @@ def signal_graph(
                     "reason": f"{via} but sender model not found in workspace",
                 }
             )
-        if signal_tail in _BUILTIN_SIGNALS:
+        if is_builtin:
             edge["builtin"] = True
         edges.append(edge)
 
     # Pass 2 — decorators, .connect() and .send() calls.
     for py, tree, module_path in parsed:
         receiver_aliases = _collect_receiver_aliases(tree)
-        model_signal_aliases = _collect_model_signal_aliases(tree)
+        origins = _collect_signal_origins(
+            tree, module_path, py.name == "__init__.py", signal_defs_by_module
+        )
         # Walk all functions (module-level + nested) for @receiver decorators.
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -403,7 +513,7 @@ def signal_graph(
                             handler_fqn,
                             _rel(root_path, py, node.lineno),
                             "@receiver",
-                            model_signal_aliases=model_signal_aliases,
+                            origins=origins,
                         )
 
             if isinstance(node, ast.Call):
@@ -418,7 +528,7 @@ def signal_graph(
                         handler,
                         _rel(root_path, py, node.lineno),
                         ".connect()",
-                        model_signal_aliases=model_signal_aliases,
+                        origins=origins,
                     )
                     continue
 
