@@ -705,7 +705,9 @@ def _build_mermaid(index: WorkspaceIndex) -> str:
                     parts.append(sanitize_label(f.on_delete))
                 if f.through_model:
                     parts.append(f"through {sanitize_label(f.through_model)}")
-                if f.related_name:
+                # related_name="+" (or "foo+") turns the reverse accessor off,
+                # so there is no name to show.
+                if f.related_name and not f.related_name.endswith("+"):
                     parts.append(f"as {sanitize_label(f.related_name)}")
                 label = (
                     f"{parts[0]} [{', '.join(parts[1:])}]"

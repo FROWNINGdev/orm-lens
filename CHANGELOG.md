@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ER diagrams, `scan` and hover cards show fields from abstract bases**
+  ([#353](https://github.com/FROWNINGdev/orm-lens/pull/353)).
+  They used to draw only what a class body declares, so on django-oscar 87
+  of 98 models showed 0 fields, and the ER diagram had 4 relations instead
+  of 117. Wagtail went from 52 to 138. Every output that describes the table
+  (`scan -f table|markdown`, `er` in all five formats, the extension's ER
+  view and hover) now includes the columns and relations an abstract base
+  contributes. The JSON `fields` list and the sidebar tree still list only
+  declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
+  which turns the reverse accessor off.
+
 ## [py-1.18.3] - 2026-11-23
 
 > Fewer false drift and migration-risk findings on real projects.

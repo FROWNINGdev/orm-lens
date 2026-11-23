@@ -34,8 +34,11 @@ def format_model(model: ParsedModel, fmt: str = "markdown") -> str:
 
 
 def _shown_fields(model: ParsedModel) -> list:
-    """A SQLAlchemy table's every column; what a Django class declares."""
-    return model.all_fields() if model.orm == "sqlalchemy" else model.fields
+    """Every column of the model's table, abstract bases' fields first.
+
+    An oscar ``UserAddress(AbstractUserAddress)`` declares nothing itself, so
+    showing only the class body printed 0 fields for it."""
+    return model.all_fields()
 
 
 def _relationship_line(r) -> str:
