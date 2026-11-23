@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **migration-risk: report only the migrations you pass**
+  (`--only PATH` or positional files).
+  The whole history is still analyzed, but the report and the exit code
+  cover only those files. The `orm-lens-migration-risk` pre-commit hook now
+  passes the staged migrations, so a project whose old migrations already
+  ran can adopt it: on django-oscar the hook failed on every commit with 29
+  critical findings from 2014, and now reports only what you stage.
+  `only-changed: true` in the GitHub Action works for `migration-risk` too.
+
 ## [py-1.18.3] - 2026-11-23
 
 > Fewer false drift and migration-risk findings on real projects.
