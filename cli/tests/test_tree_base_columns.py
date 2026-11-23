@@ -121,3 +121,4 @@ class TreeBaseColumnsTest(unittest.TestCase):
             m for app in index.apps for m in app.models if m.name == "Category"
         )
         self.assertEqual([f.name for f in category.fields], ["name"])
+        self.assertEqual([f.name for f in category.all_fields()], ["name"])
