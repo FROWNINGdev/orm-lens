@@ -10,13 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **migration-risk: report only the migrations you pass**
-  (`--only PATH` or positional files).
+  ([#355](https://github.com/FROWNINGdev/orm-lens/pull/355)),
+  with `--only PATH` or positional files.
   The whole history is still analyzed, but the report and the exit code
   cover only those files. The `orm-lens-migration-risk` pre-commit hook now
   passes the staged migrations, so a project whose old migrations already
   ran can adopt it: on django-oscar the hook failed on every commit with 29
   critical findings from 2014, and now reports only what you stage.
   `only-changed: true` in the GitHub Action works for `migration-risk` too.
+
+### Fixed
+
+- **ER diagrams, `scan` and hover cards show fields from abstract bases**
+  ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
+  They used to draw only what a class body declares, so on django-oscar 87
+  of 98 models showed 0 fields, and the ER diagram had 4 relations instead
+  of 117. Wagtail went from 52 to 138. Every output that describes the table
+  (`scan -f table|markdown`, `er` in all five formats, the extension's ER
+  view and hover) now includes the columns and relations an abstract base
+  contributes. The JSON `fields` list and the sidebar tree still list only
+  declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
+  which turns the reverse accessor off, and the `scan -f table` file column
+  is relative to the working directory instead of an absolute path.
 
 ## [py-1.18.3] - 2026-11-23
 
