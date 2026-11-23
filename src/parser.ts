@@ -611,11 +611,20 @@ const PERMISSIONS_MIXIN = [
 /**
  * Fields of `django.contrib.auth`'s abstract bases, which live in
  * site-packages where a workspace scan never looks. `is_active` on
- * `AbstractBaseUser` is a plain class attribute, not a field. A workspace class
- * of the same name wins. Mirrors `DJANGO_ABSTRACT_BASES` in
- * cli/orm_lens/parser.py.
+ * `AbstractBaseUser` is a plain class attribute, not a field.
+ * `TimeStampedModel` declares `created` and `modified` in both
+ * django-extensions and django-model-utils. A workspace class of the same name
+ * wins. Mirrors
+ * `DJANGO_ABSTRACT_BASES` in cli/orm_lens/parser.py.
  */
 const DJANGO_ABSTRACT_BASES = new Map<string, readonly ParsedField[]>([
+  [
+    'TimeStampedModel',
+    [
+      djangoField('created', 'DateTimeField', 'auto_now_add=True', 'TimeStampedModel'),
+      djangoField('modified', 'DateTimeField', 'auto_now=True', 'TimeStampedModel'),
+    ],
+  ],
   ['AbstractBaseUser', ABSTRACT_BASE_USER],
   ['PermissionsMixin', PERMISSIONS_MIXIN],
   [
