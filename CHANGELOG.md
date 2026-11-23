@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **ER diagrams, `scan` and hover cards show fields from abstract bases**
-  ([#353](https://github.com/FROWNINGdev/orm-lens/pull/353)).
+  ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
   They used to draw only what a class body declares, so on django-oscar 87
   of 98 models showed 0 fields, and the ER diagram had 4 relations instead
   of 117. Wagtail went from 52 to 138. Every output that describes the table
