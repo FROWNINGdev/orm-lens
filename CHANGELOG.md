@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view and hover) now includes the columns and relations an abstract base
   contributes. The JSON `fields` list and the sidebar tree still list only
   declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
-  which turns the reverse accessor off.
+  which turns the reverse accessor off, and the `scan -f table` file column
+  is relative to the working directory instead of an absolute path.
 
 ## [py-1.18.3] - 2026-11-23
 

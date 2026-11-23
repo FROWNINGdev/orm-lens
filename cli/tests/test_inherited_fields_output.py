@@ -8,6 +8,7 @@ fields and drew no relations for most of the project.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import unittest
@@ -71,6 +72,16 @@ class InheritedFieldsOutputTest(unittest.TestCase):
         }
         self.assertEqual(rows["Country"], ["1", "0"])
         self.assertEqual(rows["Address"], ["2", "1"])
+
+    def test_table_paths_are_relative_to_the_working_directory(self) -> None:
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            table = format_index(self.index, "table")
+        finally:
+            os.chdir(cwd)
+        self.assertIn(os.path.join("shop", "models.py") + ":", table)
+        self.assertNotIn(str(self.tmp), table)
 
     def test_model_markdown_lists_inherited_fields(self) -> None:
         md = format_model(self.models["Address"], "markdown")
