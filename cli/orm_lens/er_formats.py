@@ -45,6 +45,7 @@ from .models import (
     ParsedModel,
     WorkspaceIndex,
     find_user_model,
+    related_model_app,
     resolve_related_tail,
 )
 
@@ -107,18 +108,17 @@ def _pk_field(model: ParsedModel) -> ParsedField | None:
     return None
 
 
-def _qualified_names(index: WorkspaceIndex) -> dict[str, str]:
-    """Map bare model name → ``app.Model`` (first definition wins,
-    matching the Mermaid builder's lookup semantics)."""
-    out: dict[str, str] = {}
+def _apps_by_model_name(index: WorkspaceIndex) -> dict[str, list[str]]:
+    """Map bare model name → the apps that define it, in scan order."""
+    out: dict[str, list[str]] = {}
     for app in index.apps:
         for m in app.models:
-            out.setdefault(m.name, f"{app.name}.{m.name}")
+            out.setdefault(m.name, []).append(app.name)
     return out
 
 
 def _collect_edges(index: WorkspaceIndex) -> list[_Edge]:
-    qualified = _qualified_names(index)
+    apps_by_name = _apps_by_model_name(index)
     # Refs must point at a column that actually exists on the target table —
     # the explicit PK when one is declared, Django's implicit "id" otherwise.
     pk_by_qualified: dict[str, str] = {}
@@ -136,14 +136,16 @@ def _collect_edges(index: WorkspaceIndex) -> list[_Edge]:
             for f in _columns(model):
                 if not f.is_relation or not f.related_model:
                     continue
-                tail = (
-                    model.name
-                    if f.related_model == "self"
-                    else resolve_related_tail(f.related_model, user_name)
-                )
-                if tail is None or tail not in qualified:
-                    continue
-                target = qualified[tail]
+                if f.related_model == "self":
+                    target = f"{app.name}.{model.name}"
+                else:
+                    tail = resolve_related_tail(f.related_model, user_name)
+                    if tail is None or tail not in apps_by_name:
+                        continue
+                    target_app = related_model_app(
+                        f.related_model, tail, app.name, apps_by_name[tail]
+                    )
+                    target = f"{target_app}.{tail}"
                 edges.append(
                     _Edge(
                         src=f"{app.name}.{model.name}",
