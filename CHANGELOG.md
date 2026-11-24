@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absolute `--path` did the same for `migration-risk` and `blast-radius`, so
   GitHub could not place the annotations on the PR diff. Files under the
   working directory are now written relative to it.
+- **`er --format dbml|d2|plantuml|dot` point a relation at the right one of
+  two same-named models.** When two apps define a model with the same name
+  (`basket.Line` and `order.Line`), these four formats drew every relation
+  to that name, `ForeignKey('order.Line')` and `'self'` included, to the app
+  scanned first. They now pick the model the way Mermaid has since #223: the
+  app named in the reference, else the field's own app, else the first app.
+- **`er --format d2|plantuml|dot` draw SQLAlchemy keys like DBML does.**
+  For a SQLAlchemy table these three formats marked only the first column of
+  a composite primary key, and drew each foreign key column as a
+  `ForeignKey` row with no type. A table whose primary key is also a foreign
+  key (an `OrderLine` keyed by `order_id, tenant_id`) had no primary key at
+  all in D2 and DOT, and PlantUML listed `order_id` twice. They now draw
+  every primary key column and keep the column type of a foreign key, as
+  DBML has since #210.
 - **ER diagrams, `scan` and hover cards show fields from abstract bases**
   ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
   They used to draw only what a class body declares, so on django-oscar 87
