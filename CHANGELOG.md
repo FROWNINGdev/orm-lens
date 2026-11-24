@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
   which turns the reverse accessor off, and the `scan -f table` file column
   is relative to the working directory instead of an absolute path.
+- **migration-risk reads positional operation arguments**
+  ([#359](https://github.com/FROWNINGdev/orm-lens/pull/359)).
+  A hand-written `migrations.AddField("item", "code", field)` lost
+  `add_field_not_null_no_default`, and `DeleteModel("Item")` lost
+  `delete_model_still_referenced`, both critical, because only keywords were
+  read. `AlterField`, `AddIndex`, `AddConstraint` and the other operations
+  had the same gap. Arguments now resolve by Django's declared order, the
+  same table `drift` has used since #303; an explicit keyword still wins.
 
 ## [py-1.18.3] - 2026-11-23
 
