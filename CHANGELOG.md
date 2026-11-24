@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--format github` and `--format sarif` name files from the checkout root
+  when `--path` is a subdirectory.** With the Action's `path: backend`,
+  `nplusone` wrote `file=shop/views.py` for `backend/shop/views.py`, and an
+  absolute `--path` did the same for `migration-risk` and `blast-radius`, so
+  GitHub could not place the annotations on the PR diff. Files under the
+  working directory are now written relative to it.
 - **ER diagrams, `scan` and hover cards show fields from abstract bases**
   ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
   They used to draw only what a class body declares, so on django-oscar 87

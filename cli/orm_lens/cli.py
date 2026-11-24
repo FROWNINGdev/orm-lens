@@ -260,9 +260,13 @@ def _cmd_nplusone(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps([f.to_dict() for f in findings], indent=2, ensure_ascii=False))
     elif args.format == "sarif":
-        print(json.dumps(nplusone_sarif(findings), indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                nplusone_sarif(findings, root=args.path), indent=2, ensure_ascii=False
+            )
+        )
     elif args.format == "github":
-        annotations = nplusone_github(findings)
+        annotations = nplusone_github(findings, root=args.path)
         if annotations:
             print(annotations)
     else:
