@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Simplified Chinese translations for the queryset rules.** The documentation
+  for `DOL001` through `DOL007` is now available in Simplified Chinese and
+  linked from the locale index, the Chinese README and the complete rule
+  reference. Refs #81.
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
