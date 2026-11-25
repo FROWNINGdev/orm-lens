@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
+  flat `values_list()`.** In
+  `Order.objects.filter(user=user).order_by("-id").count() == 0` the rules
+  matched from `order_by`, so the DOL002 and DOL003 QuickFixes, which may
+  auto-apply, wrote
+  `Order.objects.filter(user=user).not order_by("-id").exists()`, a
+  SyntaxError, and the operator checks looked at the `.` before `order_by`.
+  `.first()` on a flat `values_list()` returns the first value, which is also
+  `None` when that row holds NULL, so DOL003 and DOL004 no longer flag it.
+  Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361).
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
