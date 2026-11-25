@@ -2,6 +2,7 @@ import { Finding, Rule, RuleContext } from './types';
 import { lookupTypos } from '../lookupTypos';
 import {
   MAX_ASSIGN_LOOKBACK,
+  bareSelectLoads,
   classifyAttr,
   isCovered,
   resolveLoopSource,
@@ -473,8 +474,13 @@ const DOL007: Rule = {
               ? classifyAttr(ctx.index, source.model, attr)
               : null;
           if (kind === 'scalar') continue;
-          // Gate 2 — the chain already spans it.
-          if (isCovered(attr, kind, source)) continue;
+          // Gate 2 — the chain already spans it. A bare `.select_related()`
+          // skips nullable relations, which only the index can tell.
+          const bareSelect =
+            ctx.index && source.model && source.selectRelated.has('*')
+              ? bareSelectLoads(ctx.index, source.model, attr)
+              : null;
+          if (isCovered(attr, kind, source, bareSelect)) continue;
           out.push({
             code: 'DOL007',
             messageId: 'default',

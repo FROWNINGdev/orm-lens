@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A bare `.select_related()` no longer hides a nullable relation from DOL007
+  and `nplusone`.** Django's no-argument `select_related()` follows only the
+  non-null foreign keys and one-to-one fields declared on the model; a
+  nullable one and the reverse side of a one-to-one still cost a query per
+  row. Both analyzers read every relation as covered by it. When the schema
+  knows the model they now report those accesses; without a schema, a bare
+  `.select_related()` still covers every relation. Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361).
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
