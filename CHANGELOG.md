@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
+  and `URLField`**.
+  `alter_field_char_length` only matched the exact name `CharField`, so
+  `AlterField(..., field=models.EmailField(max_length=100))` got no finding,
+  although these fields are varchar columns and existing rows longer than
+  the new length make the migration fail the same way. The rule now covers
+  Django's CharField subclasses and project fields named like them
+  (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
+  not reach the column.
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
