@@ -1005,6 +1005,7 @@ def _collect_defs(
 
             is_mptt_meta = line_indent == indent and bool(re.match(r"class\s+MPTTMeta\b", stripped))
             if not cond_stack and (rx["META_START_RE"].match(inner) or is_mptt_meta):
+                meta_items = _inline_meta_items(stripped)
                 k = j + 1
                 while k < len(lines):
                     if k in in_string:
@@ -1016,18 +1017,19 @@ def _collect_defs(
                     m2 = rx["META_ITEM_RE"].match(ml)
                     if m2:
                         value, k = _read_meta_value(lines, k, m2.group(2))
-                        key = m2.group(1)
-                        if not is_mptt_meta:
-                            model.meta[key] = value
-                        elif key in _MPTT_FIELD_DEFAULTS:
-                            try:
-                                field_name = ast.literal_eval(value)
-                            except (ValueError, SyntaxError):
-                                field_name = None
-                            model.mptt_field_names[key] = (
-                                field_name if isinstance(field_name, str) and field_name else None
-                            )
+                        meta_items.append((m2.group(1), value))
                     k += 1
+                for key, value in meta_items:
+                    if not is_mptt_meta:
+                        model.meta[key] = value
+                    elif key in _MPTT_FIELD_DEFAULTS:
+                        try:
+                            field_name = ast.literal_eval(value)
+                        except (ValueError, SyntaxError):
+                            field_name = None
+                        model.mptt_field_names[key] = (
+                            field_name if isinstance(field_name, str) and field_name else None
+                        )
                 j = k
                 continue
 
@@ -1221,6 +1223,41 @@ def _nested_abstract_defs(
             f"{outer}.{name}" for _, name in bound if f"{outer}.{name}" not in kept
         )
     return out
+
+
+# ``class Meta: abstract = True`` keeps its options on the header line.
+_INLINE_CLASS_BODY_RE = re.compile(r"^class\s+\w+\s*(?:\([^)]*\))?\s*:(.*)$")
+
+
+def _inline_meta_items(header: str) -> list[tuple[str, str]]:
+    """Options written on the ``class Meta:`` line itself, as ``(name, source)``.
+
+    ``class Meta: abstract = True`` is valid Python, but only the lines below
+    the header were read, so such a base came out as a concrete model without
+    its fields reaching the subclasses. The text after the colon is a simple
+    statement list; text that does not parse on its own (a value continued on
+    the next line) is left alone, as before.
+    """
+    match = _INLINE_CLASS_BODY_RE.match(header)
+    body = match.group(1).strip() if match else ""
+    if not body:
+        return []
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return []
+    items: list[tuple[str, str]] = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        source = ast.get_source_segment(body, value)
+        if isinstance(target, ast.Name) and source is not None:
+            items.append((target.id, source))
+    return items
 
 
 def _read_meta_value(

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A one-line `class Meta: abstract = True` is read**.
+  Only the lines below `class Meta:` were parsed, so options written on the
+  header line itself were lost. Such an abstract base was listed as a
+  concrete model, its fields were missing from every subclass, and `drift`
+  failed with "declared, but no migration creates it" for the base and
+  "migrated but no longer declared" for the inherited columns. Options after
+  the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
+  are now read like the indented ones.
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
