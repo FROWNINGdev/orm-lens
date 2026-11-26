@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`er --format d2` quotes names D2 reserves.** A column named `width`,
+  `height`, `label`, `link`, `icon` or another D2 keyword was read as an
+  attribute of the table, not as a row: wagtail's image `width` and `height`
+  made `d2` reject the file, and a `label` column renamed the table. A model
+  named `Label` or `Link` broke the same way. Such names are now quoted, as
+  the D2 docs ask.
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
