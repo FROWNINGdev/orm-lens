@@ -41,6 +41,7 @@ from .drift import LEGEND_LINES as DRIFT_LEGEND_LINES
 from .drift import detect_drift, format_drift
 from .er_formats import ER_BUILDERS
 from .er_formats import _columns as _er_columns
+from .er_formats import _is_column as _er_is_column
 from .formatters import format_hover, format_index, format_model
 from .impact import group_by_layer, scan_impact
 from .migrations_parser import analyze_migration_risks, describe_migration_dependency
@@ -686,7 +687,10 @@ def _build_mermaid(index: WorkspaceIndex) -> str:
         for model in app.models:
             lines.append(f"  {entity(app.name, model.name)} {{")
             for f in _er_columns(model):
-                if f.is_relation:
+                # A SQLAlchemy foreign key is a typed column of the table
+                # (often part of its primary key); only Django relation
+                # fields and relationship() attributes are edges alone.
+                if not _er_is_column(model, f):
                     continue
                 type_safe = "".join(ch for ch in f.type if ch.isalnum())
                 name_safe = safe(f.name)

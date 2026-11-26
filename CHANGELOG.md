@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`er` (Mermaid) draws SQLAlchemy foreign key columns.** The default
+  Mermaid diagram left every SQLAlchemy foreign key column out of its table,
+  so `Address` lost `user_id` and an association table keyed by two foreign
+  keys (`order_id, tenant_id`) showed only `tenant_id`. They are now drawn
+  with their column type, as DBML, D2, PlantUML and DOT have since #356.
+
 ## [py-1.18.4] - 2026-11-24
 
 > Pre-commit checks only new migrations; ER shows abstract-base fields.
