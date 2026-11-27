@@ -364,10 +364,14 @@ def relation_points_at(
     app_name: str | None = None,
     user_model_name: str | None = None,
     known_apps: Collection[str] | None = None,
+    source_app: str | None = None,
 ) -> bool:
     """True when ``related_model`` names ``app_name.model_name``.
 
-    A bare ``Model`` cannot name an app, so it matches by model name alone.
+    A bare ``Model`` resolves against ``source_app`` (the app declaring the
+    relation) when given, matching Django's rule that an unqualified relation
+    string refers to a model in the same app. When ``source_app`` is omitted,
+    a bare name matches by model name alone.
     A qualified ``billing.Owner`` matches ``shop.Owner`` only when the app
     labels agree: Django resolves the string against the app registry, and
     two apps can define the same model name.
@@ -382,6 +386,14 @@ def relation_points_at(
     target_app, target_name = resolve_related_target(related_model, user_model_name)
     if target_name != model_name:
         return False
+    if (
+        target_app is None
+        and source_app is not None
+        and related_model
+        and related_model != "self"
+        and related_model.rsplit(".", 1)[-1] != "AUTH_USER_MODEL"
+    ):
+        target_app = source_app
     if target_app is None or app_name is None or target_app == app_name:
         return True
     return known_apps is None or target_app not in known_apps
@@ -437,7 +449,12 @@ def cascade_preview(index: WorkspaceIndex, ref: str) -> dict[str, Any]:
                     if not is_self:
                         continue
                 elif not relation_points_at(
-                    f.related_model, m.name, target_app, user_name, known_apps
+                    f.related_model,
+                    m.name,
+                    target_app,
+                    user_name,
+                    known_apps,
+                    app.name,
                 ):
                     continue
                 on_delete = (f.on_delete or "").upper()

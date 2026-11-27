@@ -557,7 +557,69 @@ class QualifiedRelationTargetTest(unittest.TestCase):
             [rel["from"] for rel in billing["inbound"]], ["shop.Post"]
         )
 
+class BareForeignKeySameAppTest(unittest.TestCase):
+    """A bare ``ForeignKey("Owner")`` without an app label points at ``Owner``
+    in the declaring app, not an identically named model in another app
+    (issue #299)."""
 
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="djol-bare-fk-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        (self.tmp / "manage.py").write_text("", encoding="utf-8")
+        shop = self.tmp / "shop"
+        shop.mkdir()
+        (shop / "__init__.py").write_text("", encoding="utf-8")
+        (shop / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Owner(models.Model):\n"
+            "    name = models.CharField(max_length=50)\n\n"
+            "class Store(models.Model):\n"
+            '    owner = models.ForeignKey("Owner", on_delete=models.CASCADE)\n',
+            encoding="utf-8",
+        )
+        crm = self.tmp / "crm"
+        crm.mkdir()
+        (crm / "__init__.py").write_text("", encoding="utf-8")
+        (crm / "models.py").write_text(
+            "from django.db import models\n\n"
+            "class Owner(models.Model):\n"
+            "    email = models.EmailField()\n",
+            encoding="utf-8",
+        )
+        clear_cache()
+        self.addCleanup(clear_cache)
+
+    def test_cascade_and_find_relations_scope_bare_fk_to_declaring_app(self) -> None:
+        from orm_lens.models import cascade_preview
+        from orm_lens.parser import DEFAULT_EXCLUDES, scan_workspace
+
+        idx = scan_workspace(str(self.tmp), DEFAULT_EXCLUDES)
+
+        crm_cascade = cascade_preview(idx, "crm.Owner")
+        self.assertEqual(crm_cascade["cascade_kills"], [])
+
+        shop_cascade = cascade_preview(idx, "shop.Owner")
+        self.assertEqual(
+            [(e["model"], e["via_field"]) for e in shop_cascade["cascade_kills"]],
+            [("shop.Store", "owner")],
+        )
+
+        crm_rels = json.loads(
+            _tool_find_relations(
+                {"workspace_root": str(self.tmp), "model": "crm.Owner"}
+            )
+        )
+        self.assertEqual(crm_rels["inbound"], [])
+
+        shop_rels = json.loads(
+            _tool_find_relations(
+                {"workspace_root": str(self.tmp), "model": "shop.Owner"}
+            )
+        )
+        self.assertEqual(
+            [(rel["from"], rel["field"]) for rel in shop_rels["inbound"]],
+            [("shop.Store", "owner")],
+        )
 class AppConfigLabelAliasTest(unittest.TestCase):
     """A FK string carries the app *label*, which an ``AppConfig`` renames
     (wagtail's ``images/`` app is labelled ``wagtailimages``). When no

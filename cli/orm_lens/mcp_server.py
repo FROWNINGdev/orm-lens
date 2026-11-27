@@ -103,11 +103,17 @@ def _workspace_user_model(idx: WorkspaceIndex):
 
 
 def _rel_matches_target(
-    related_model, target_name, user_model, target_app=None, known_apps=None
+    related_model,
+    target_name,
+    user_model,
+    target_app=None,
+    known_apps=None,
+    source_app=None,
 ) -> bool:
     """True iff ``related_model`` points at ``target_name`` in the target app.
 
     ``settings.AUTH_USER_MODEL`` is resolved through the workspace user model;
+    a bare ``Model`` resolves against ``source_app`` (the declaring app);
     a qualified ``app.Model`` must name the same app, so ``billing.Owner``
     does not match ``shop.Owner``. ``known_apps`` is the scan's app names: a
     prefix naming none of them is an ``AppConfig`` label alias
@@ -115,7 +121,7 @@ def _rel_matches_target(
     """
     user_name = user_model.name if user_model is not None else None
     return relation_points_at(
-        related_model, target_name, target_app, user_name, known_apps
+        related_model, target_name, target_app, user_name, known_apps, source_app
     )
 
 
@@ -203,7 +209,12 @@ def _tool_find_relations(args: dict[str, Any]) -> str:
                 if not f.is_relation:
                     continue
                 if not _rel_matches_target(
-                    f.related_model, m.name, user_model, target_app, known_apps
+                    f.related_model,
+                    m.name,
+                    user_model,
+                    target_app,
+                    known_apps,
+                    app.name,
                 ):
                     continue
                 out["inbound"].append(
