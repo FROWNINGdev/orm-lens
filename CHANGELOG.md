@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **signals: no `src.` prefix on handler and signal names in a `src/`
+  layout.** Names were built from the path relative to the scan root, so
+  `src/shop/receivers.py` gave `src.shop.receivers.send_receipt` although the
+  code imports `shop.receivers`. The name now starts at the topmost package
+  directory (the highest one, going up from the file, with an `__init__.py`);
+  the `file` location is unchanged, and a file in a directory without an
+  `__init__.py` keeps its full path. Fixes #378.
+
 ## [py-1.18.5] - 2026-11-27
 
 > Findings in GitLab merge requests; treebeard columns in drift.

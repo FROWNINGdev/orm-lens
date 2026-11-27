@@ -63,12 +63,26 @@ def _rel(root: Path, path: Path, line: int) -> str:
 
 
 def _module_path_from_file(root: Path, path: Path) -> str:
-    """``root/notifications/signals.py`` → ``notifications.signals``."""
+    """``root/notifications/signals.py`` → ``notifications.signals``.
+
+    In a ``src/`` layout, ``root/src/shop/signals.py`` → ``shop.signals``.
+    """
     try:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
     parts = list(rel.parts)
+    # Drop leading directories that aren't packages (``src/`` in a src
+    # layout): the import path starts at the topmost directory, going up from
+    # the file, that still has an ``__init__.py``. A file in a directory
+    # without one (namespace package) keeps its full path.
+    first_package = len(parts) - 1
+    folder = path.parent
+    while first_package > 0 and (folder / "__init__.py").is_file():
+        first_package -= 1
+        folder = folder.parent
+    if first_package < len(parts) - 1:
+        parts = parts[first_package:]
     if parts and parts[-1].endswith(".py"):
         parts[-1] = parts[-1][:-3]
     if parts and parts[-1] == "__init__":
