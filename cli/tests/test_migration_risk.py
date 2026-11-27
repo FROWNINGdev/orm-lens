@@ -524,6 +524,62 @@ class AddIndexTest(unittest.TestCase):
 
 
 class AlterFieldTest(unittest.TestCase):
+    def _length_history(self, operations: list[list[str]]) -> list[MigrationRisk]:
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "orders"
+            for index, ops in enumerate(operations):
+                name = f"{index + 1:04d}_step"
+                dependencies = [] if index == 0 else [("orders", f"{index:04d}_step")]
+                _write(
+                    app, name,
+                    "from django.db import migrations, models\n"
+                    "class Migration(migrations.Migration):\n"
+                    f"    dependencies = {dependencies!r}\n"
+                    f"    operations = [{', '.join(ops)}]\n",
+                )
+            return _by_rule(
+                analyze_migration_risks(tmp, current_schema=_empty_schema())
+            ).get("alter_field_char_length", [])
+
+    def test_replayed_char_lengths_only_warn_on_shrink(self) -> None:
+        findings = self._length_history([
+            ["migrations.CreateModel(name='Order', fields=[('code', models.CharField(max_length=255))])"],
+            ["migrations.AlterField('order', 'code', models.CharField(max_length=255, unique=True))"],
+            ["migrations.AlterField('order', 'code', models.CharField(max_length=300))"],
+            ["migrations.AlterField('order', 'code', models.CharField(max_length=100))"],
+        ])
+        self.assertEqual([f.migration for f in findings], ["0004_step"])
+        self.assertIn("300 → 100", findings[0].description)
+
+    def test_lengths_follow_field_and_model_lifecycle(self) -> None:
+        findings = self._length_history([
+            ["migrations.CreateModel(name='Order', fields=[])"],
+            [
+                "migrations.AddField('order', 'code', models.SlugField(max_length=255))",
+                "migrations.RenameField('order', 'code', 'slug')",
+                "migrations.RenameModel('Order', 'Purchase')",
+                "migrations.AlterField('purchase', 'slug', models.SlugField(max_length=255))",
+                "migrations.RemoveField('purchase', 'slug')",
+                "migrations.AddField('purchase', 'slug', models.SlugField(max_length=20))",
+                "migrations.AlterField('purchase', 'slug', models.SlugField(max_length=30))",
+                "migrations.AlterField('purchase', 'slug', models.SlugField(max_length=10))",
+                "migrations.DeleteModel('Purchase')",
+                "migrations.CreateModel(name='Purchase', fields=[('slug', models.SlugField(max_length=5))])",
+                "migrations.AlterField('purchase', 'slug', models.SlugField(max_length=10))",
+            ],
+        ])
+        self.assertEqual(len(findings), 1)
+        self.assertIn("30 → 10", findings[0].description)
+
+    def test_unreadable_length_discards_previous_length(self) -> None:
+        findings = self._length_history([
+            ["migrations.CreateModel(name='Order', fields=[('code', models.CharField(max_length=255))])"],
+            ["migrations.AlterField('order', 'code', models.CharField(max_length=UNKNOWN))"],
+            ["migrations.AlterField('order', 'code', models.CharField(max_length=255))"],
+        ])
+        self.assertEqual([f.migration for f in findings], ["0003_step"])
+        self.assertIn("if this narrows", findings[0].description)
+
     def test_char_field_length_change_flagged(self) -> None:
         with TemporaryDirectory() as tmp:
             app = Path(tmp) / "orders"

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `migration-risk` only warns about a known varchar length change when the
+  column shrinks. Replay field lengths across migrations, include the old and
+  new lengths in narrowing warnings, and retain warnings for unknown history (#369).
+
 ## [py-1.18.5] - 2026-11-27
 
 > Findings in GitLab merge requests; treebeard columns in drift.
