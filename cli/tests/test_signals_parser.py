@@ -232,6 +232,65 @@ class SignalGraphTest(unittest.TestCase):
             self.assertEqual(result["orphan_handlers"], [])
 
 
+class SignalModulePathTest(unittest.TestCase):
+    """Handler and signal names are import paths, not paths from the scan root."""
+
+    @staticmethod
+    def _write_shop(base: Path, *, packages: bool = True) -> None:
+        if packages:
+            _write(base / "shop" / "__init__.py", "")
+        _write(
+            base / "shop" / "signals.py",
+            "from django.dispatch import Signal\n\norder_paid = Signal()\n",
+        )
+        _write(
+            base / "shop" / "receivers.py",
+            "from django.dispatch import receiver\n\n"
+            "from shop.signals import order_paid\n\n\n"
+            "@receiver(order_paid)\n"
+            "def send_receipt(sender, **kwargs):\n"
+            "    pass\n",
+        )
+
+    def _names(self, root: Path) -> tuple[list[tuple[str, str]], list[str]]:
+        result = signal_graph(str(root))
+        edges = [(edge["handler"], edge["file"]) for edge in result["edges"]]
+        signals = [sig["fqn"] for sig in result["custom_signals"]]
+        return edges, signals
+
+    def test_src_layout_drops_the_src_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_shop(root / "src")
+
+            edges, signals = self._names(root)
+
+            self.assertEqual(edges, [("shop.receivers.send_receipt", "src/shop/receivers.py:7")])
+            self.assertEqual(signals, ["shop.signals.order_paid"])
+
+    def test_flat_layout_gives_the_same_names(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_shop(root)
+
+            edges, signals = self._names(root)
+
+            self.assertEqual(edges, [("shop.receivers.send_receipt", "shop/receivers.py:7")])
+            self.assertEqual(signals, ["shop.signals.order_paid"])
+
+    def test_directory_without_init_keeps_its_full_path(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_shop(root / "src", packages=False)
+
+            edges, signals = self._names(root)
+
+            self.assertEqual(
+                edges, [("src.shop.receivers.send_receipt", "src/shop/receivers.py:7")]
+            )
+            self.assertEqual(signals, ["src.shop.signals.order_paid"])
+
+
 class SignalConnectTest(unittest.TestCase):
     """``signal.connect(handler, sender=Model)`` registers a receiver just
     like ``@receiver`` does (issue #183)."""
