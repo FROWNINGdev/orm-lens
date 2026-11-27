@@ -316,5 +316,181 @@ class NonStandardFilenameTest(unittest.TestCase):
             self.assertEqual(result["roots"], ["0001_initial"])
 
 
+class ConfiguredLabelLookupTest(unittest.TestCase):
+    """#308: `migration-deps` looks apps up by label, not folder name.
+
+    Ralph's test apps all live in folders called ``tests``; the ones with
+    ``label = "mixins_tests"`` in ``apps.py`` were unreachable by label and
+    were merged into whichever app the folder name matched.
+    """
+
+    def _write_app(
+        self,
+        root: Path,
+        rel: str,
+        label: str | None,
+        second: str,
+    ) -> None:
+        app_dir = root / rel
+        effective = label or "tests"
+        if label is not None:
+            app_dir.mkdir(parents=True, exist_ok=True)
+            (app_dir / "apps.py").write_text(
+                "from django.apps import AppConfig\n\n"
+                "class TestsConfig(AppConfig):\n"
+                f"    name = {app_dir.name!r}\n"
+                f"    label = {label!r}\n",
+                encoding="utf-8",
+            )
+        _write_migration(
+            app_dir,
+            "0001_initial",
+            "from django.db import migrations\n\n"
+            "class Migration(migrations.Migration):\n"
+            "    dependencies = []\n"
+            "    operations = []\n",
+        )
+        _write_migration(
+            app_dir,
+            second,
+            "from django.db import migrations\n\n"
+            "class Migration(migrations.Migration):\n"
+            f"    dependencies = [({effective!r}, '0001_initial')]\n"
+            "    operations = []\n",
+        )
+        _init_py(app_dir)
+
+    def _project(self, root: Path) -> None:
+        self._write_app(root, "tests", None, "0002_alter_order_id")
+        self._write_app(
+            root, "lib/mixins/tests", "mixins_tests", "0002_alter_macmodel_id"
+        )
+        self._write_app(
+            root,
+            "lib/permissions/tests",
+            "permissions_tests",
+            "0002_alter_article_id",
+        )
+
+    def test_app_is_found_by_its_configured_label(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._project(root)
+
+            result = describe_migration_dependency("mixins_tests", str(root))
+
+            self.assertNotIn("error", result)
+            self.assertEqual(
+                [m["name"] for m in result["migrations"]],
+                ["0001_initial", "0002_alter_macmodel_id"],
+            )
+            self.assertEqual(result["roots"], ["0001_initial"])
+            self.assertEqual(result["leaves"], ["0002_alter_macmodel_id"])
+
+    def test_folder_name_returns_only_the_default_label_app(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._project(root)
+
+            result = describe_migration_dependency("tests", str(root))
+
+            self.assertNotIn("error", result)
+            self.assertEqual(
+                [m["name"] for m in result["migrations"]],
+                ["0001_initial", "0002_alter_order_id"],
+            )
+            self.assertEqual(result["roots"], ["0001_initial"])
+            self.assertEqual(result["leaves"], ["0002_alter_order_id"])
+
+    def test_label_used_by_dependencies_finds_the_app_without_apps_py(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_dir = root / "tests"
+            _write_migration(
+                app_dir,
+                "0001_initial",
+                "from django.db import migrations\n\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = []\n"
+                "    operations = []\n",
+            )
+            _write_migration(
+                app_dir,
+                "0002_alter_macmodel_id",
+                "from django.db import migrations\n\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = [('mixins_tests', '0001_initial')]\n"
+                "    operations = []\n",
+            )
+            _init_py(app_dir)
+
+            result = describe_migration_dependency("mixins_tests", str(root))
+
+            self.assertNotIn("error", result)
+            self.assertEqual(
+                [m["name"] for m in result["migrations"]],
+                ["0001_initial", "0002_alter_macmodel_id"],
+            )
+
+    def test_same_name_cross_app_dependency_does_not_claim_the_directory(
+        self,
+    ) -> None:
+        """Two apps, no ``apps.py``: ``orders`` has a single migration whose
+        only dependency is ``("users", "0001_initial")``. That tuple names the
+        depending file itself, so it cannot be this app's own label evidence;
+        the orders directory must not be pulled into ``users``."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            users_dir = root / "users"
+            _write_migration(
+                users_dir,
+                "0001_initial",
+                "from django.db import migrations\n\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = []\n"
+                "    operations = []\n",
+            )
+            _init_py(users_dir)
+            orders_dir = root / "orders"
+            _write_migration(
+                orders_dir,
+                "0001_initial",
+                "from django.db import migrations\n\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = [('users', '0001_initial')]\n"
+                "    operations = []\n",
+            )
+            _init_py(orders_dir)
+
+            result = describe_migration_dependency("users", str(root))
+
+            self.assertNotIn("error", result)
+            self.assertEqual(
+                [m["name"] for m in result["migrations"]], ["0001_initial"]
+            )
+            # The surviving file is the users one (no dependencies), not the
+            # orders file that name-dedup used to keep.
+            self.assertEqual(result["migrations"][0]["dependencies"], [])
+            self.assertEqual(result["roots"], ["0001_initial"])
+            self.assertEqual(result["leaves"], ["0001_initial"])
+            self.assertEqual(result["cross_app_deps"], [])
+
+            orders = describe_migration_dependency("orders", str(root))
+
+            self.assertNotIn("error", orders)
+            self.assertEqual(
+                [m["name"] for m in orders["migrations"]], ["0001_initial"]
+            )
+            self.assertEqual(
+                orders["migrations"][0]["dependencies"],
+                [["users", "0001_initial"]],
+            )
+            self.assertEqual(orders["roots"], ["0001_initial"])
+            self.assertEqual(orders["leaves"], ["0001_initial"])
+            self.assertEqual(
+                orders["cross_app_deps"], [["users", "0001_initial"]]
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

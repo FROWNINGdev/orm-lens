@@ -1062,6 +1062,100 @@ class SameAppNameTwiceTest(unittest.TestCase):
             )
 
 
+class SameFolderNameDistinctLabelsTest(unittest.TestCase):
+    """#308: apps in same-named folders with distinct configured labels.
+
+    Ralph ships five test apps, each in a folder called ``tests``, with
+    labels ``tests``, ``custom_fields_tests``, ``mixins_tests`` and so on.
+    Grouping the replayed side by folder name merged all five into one
+    ``tests`` app, while the declared side keyed models by package — the
+    two sides could never agree. Grouping is by the resolved label now,
+    on both sides.
+    """
+
+    def _write_app(
+        self, root: Path, rel: str, label: str | None, model: str
+    ) -> Path:
+        app = root / rel
+        migrations = app / "migrations"
+        migrations.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (migrations / "__init__.py").write_text("", encoding="utf-8")
+        if label is not None:
+            (app / "apps.py").write_text(
+                "from django.apps import AppConfig\n\n"
+                "class TestsConfig(AppConfig):\n"
+                f"    name = {app.name!r}\n"
+                f"    label = {label!r}\n",
+                encoding="utf-8",
+            )
+        (migrations / "0001_initial.py").write_text(
+            _migration(
+                f'        migrations.CreateModel(name="{model}", fields=[\n'
+                '            ("id", None), ("name", None),\n'
+                "        ]),\n"
+            ),
+            encoding="utf-8",
+        )
+        (app / "models.py").write_text(
+            "from django.db import models\n\n"
+            f"class {model}(models.Model):\n"
+            "    name = models.CharField(max_length=10)\n",
+            encoding="utf-8",
+        )
+        return app
+
+    def _ralph_like_project(self, root: Path) -> None:
+        self._write_app(root, "tests", None, "Order")
+        self._write_app(root, "lib/mixins/tests", "mixins_tests", "MacModel")
+        self._write_app(
+            root, "lib/permissions/tests", "permissions_tests", "Article"
+        )
+
+    def test_distinct_labels_are_scanned_as_separate_apps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._ralph_like_project(root)
+
+            report = detect_drift(str(root))
+
+            self.assertEqual(report.apps_scanned, 3)
+            self.assertEqual(report.drifted, [])
+
+    def test_real_drift_is_attributed_to_the_configured_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._ralph_like_project(root)
+            app = root / "lib" / "mixins" / "tests"
+            (app / "models.py").write_text(
+                "from django.db import models\n\n"
+                "class MacModel(models.Model):\n"
+                "    name = models.CharField(max_length=10)\n"
+                "    never_migrated = models.IntegerField(default=0)\n",
+                encoding="utf-8",
+            )
+
+            report = detect_drift(str(root))
+
+            self.assertEqual(len(report.drifted), 1)
+            drift = report.drifted[0]
+            self.assertEqual(drift.app, "mixins_tests")
+            self.assertEqual(drift.model, "macmodel")
+            self.assertEqual(drift.missing_in_migrations, ["never_migrated"])
+            self.assertTrue(drift.is_blocking)
+
+    def test_copies_of_one_labelled_app_still_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_app(root, "a/tests", "shared_tests", "Alpha")
+            self._write_app(root, "b/tests", "shared_tests", "Beta")
+
+            report = detect_drift(str(root))
+
+            self.assertEqual(report.apps_scanned, 1)
+            self.assertEqual(report.drifted, [])
+
+
 class NestedAbstractBaseDriftTest(unittest.TestCase):
     """#309: a field from ``NamedMixin.NonUnique`` is declared, not drift."""
 

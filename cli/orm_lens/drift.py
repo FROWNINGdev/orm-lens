@@ -38,6 +38,7 @@ from typing import Any
 from .migrations_parser import (
     OPERATION_ARGS,
     _build_current_schema,
+    _configured_app_label,
     _find_all_migration_apps,
     _find_migration_class,
     _iter_migration_files,
@@ -407,9 +408,20 @@ def _apply(state: dict[str, set[str]], op: str, call: ast.Call) -> None:
             fields.add(new)
 
 
-def replay_app(migrations_dir: Path) -> tuple[dict[str, set[str]], int]:
+def replay_app(
+    migrations_dir: Path,
+    *,
+    app_label: str | None = None,
+    infer_label: bool = True,
+) -> tuple[dict[str, set[str]], int]:
     """Replay one app's migrations into ``{model_lower: {field_names}}``.
 
+    :param app_label: the app's label, when the caller already resolved it
+        (a configured ``AppConfig.label``, say). Defaults to the package
+        folder name, which is Django's default label.
+    :param infer_label: let the migrations' dependency tuples override a
+        folder-derived label. Off when ``app_label`` came from ``apps.py``:
+        a configured label is authoritative, not a guess to second-guess.
     :returns: the state, and how many migration files contributed to it.
     """
     state: dict[str, set[str]] = {}
@@ -429,8 +441,12 @@ def replay_app(migrations_dir: Path) -> tuple[dict[str, set[str]], int]:
     replayed = len(parsed)
     # The directory name is the app's package, which is its label unless
     # `AppConfig.label` overrides it; `_replay_order` checks the dependency
-    # tuples before trusting it.
-    for _path, tree in _replay_order(parsed, app_label=migrations_dir.parent.name):
+    # tuples before trusting a folder-derived label.
+    for _path, tree in _replay_order(
+        parsed,
+        app_label=app_label if app_label is not None else migrations_dir.parent.name,
+        infer_label=infer_label,
+    ):
         local_ops = _local_structural_ops(tree)
         for call in _operations(tree):
             op = _op_name(call)
@@ -453,23 +469,48 @@ def detect_drift(
     """
     root = str(Path(project_root).resolve())
     parent_links: dict[str, dict[str, set[str]]] = {}
+
+    # Group by the app's label, not its folder name: a literal
+    # `AppConfig.label` wins and the folder name is the fallback, exactly as
+    # `analyze_migration_risks` groups. The declared side gets the same
+    # package -> label mapping, so a model declared in `lib/mixins/tests`
+    # is compared against the migrations of `mixins_tests`. Without this,
+    # every app in a folder called `tests` merged into one `tests` app on
+    # the replayed side while its models stayed split by package, and the
+    # two sides could never agree (#308).
+    app_labels_by_package: dict[Path, str] = {}
+    resolved: list[tuple[str, Path, bool]] = []
+    for directory_label, migrations_dir in _find_all_migration_apps(root):
+        configured = _configured_app_label(migrations_dir.parent)
+        app_label = configured or directory_label
+        app_labels_by_package[migrations_dir.parent.resolve()] = app_label
+        resolved.append((app_label, migrations_dir, configured is not None))
+
     if declared is None:
-        declared = _build_current_schema(root, parent_links=parent_links)
+        declared = _build_current_schema(
+            root,
+            app_labels_by_package=app_labels_by_package,
+            parent_links=parent_links,
+        )
 
     report = DriftReport()
     seen_apps: set[str] = set()
 
-    # Several directories can carry the same app name — django-guardian ships
+    # Several directories can carry the same app — django-guardian ships
     # example_project/core and example_project_custom_group/core, and any
-    # monorepo has the same shape. The declared side is already merged by name
-    # (the parser labels an app by its directory), so replaying each migrations
-    # directory separately compared one project's migrations against both
-    # projects' models: core.customuser was printed twice, and core.customgroup
-    # came out as "no migration creates it" *and* "migrated but no longer
-    # declared" at once. Merge the replayed state per label so both sides agree.
+    # monorepo has the same shape. The declared side is merged by label, so
+    # replaying each migrations directory separately compared one project's
+    # migrations against both projects' models: core.customuser was printed
+    # twice, and core.customgroup came out as "no migration creates it" *and*
+    # "migrated but no longer declared" at once. Merge the replayed state
+    # per label so both sides agree.
     merged: dict[str, dict[str, set[str]]] = {}
-    for app_label, migrations_dir in _find_all_migration_apps(root):
-        migrated, replayed = replay_app(migrations_dir)
+    for app_label, migrations_dir, has_configured_label in resolved:
+        migrated, replayed = replay_app(
+            migrations_dir,
+            app_label=app_label,
+            infer_label=not has_configured_label,
+        )
         report.migrations_replayed += replayed
         into = merged.setdefault(app_label, {})
         for model, fields in migrated.items():

@@ -65,25 +65,51 @@ _KNOWN_OP_TYPES = frozenset(
 
 
 def _find_migrations_dirs(root: str, app_label: str) -> list[Path]:
-    """Walk ``root`` and return every ``<app_label>/migrations`` folder found.
+    """Walk ``root`` and return every migrations folder whose app is ``app_label``.
 
-    A workspace may contain the same app label in multiple locations
-    (mono-repos, vendored copies). We union them so the caller sees every
-    migration file matching the label. An app is also found by the label its
-    ``apps.py`` declares, so ``misago_threads`` finds ``threads/migrations``.
+    An app's label is its literal ``AppConfig.label`` when the sibling
+    ``apps.py`` sets one, the label its own migrations use in their
+    dependency tuples when those settle it, and the folder name otherwise.
+    Matching on the label rather than the folder name means an app living
+    in a folder called ``tests`` with ``label = "mixins_tests"`` is found
+    under ``mixins_tests`` — and not under ``tests``, where it used to be
+    merged with every other folder of that name. One exception: when no
+    app in the workspace actually carries the queried label, the folder
+    name still addresses the app that lives there, so ``migration-deps
+    threads`` finds the app whose configured label is ``forum_threads``
+    (#327). A workspace may still contain the same app in multiple
+    locations (mono-repos, vendored copies); those union, as before.
     """
+    apps = _find_all_migration_apps(root)
+    configured_by_dir = {
+        mig_dir: _configured_app_label(mig_dir.parent) for _, mig_dir in apps
+    }
+    claimed = {
+        configured_by_dir[mig_dir] or directory_label
+        for directory_label, mig_dir in apps
+    }
     matches: list[Path] = []
-    root_path = Path(root)
-    for dirpath, dirnames, _filenames in os.walk(root_path):
-        # skip hidden / virtualenv-ish trees for perf and correctness
-        dirnames[:] = [
-            d for d in dirnames
-            if not d.startswith(".") and d not in ("node_modules", "venv", ".venv", "env")
-        ]
-        if os.path.basename(dirpath) == "migrations":
-            parent = os.path.basename(os.path.dirname(dirpath))
-            if parent == app_label or _configured_app_label(Path(dirpath).parent) == app_label:
-                matches.append(Path(dirpath))
+    for directory_label, mig_dir in apps:
+        configured = configured_by_dir[mig_dir]
+        if configured is not None:
+            if configured == app_label or (
+                directory_label == app_label and app_label not in claimed
+            ):
+                matches.append(mig_dir)
+            continue
+        if directory_label == app_label:
+            matches.append(mig_dir)
+            continue
+        deps_by_name: dict[str, list[list[str]]] = {}
+        for py in _iter_migration_files(mig_dir):
+            tree = _read_migration_tree(py)
+            if tree is None:
+                continue
+            cls = _find_migration_class(tree)
+            if cls is not None:
+                deps_by_name[py.stem] = _migration_dependencies(cls)
+        if deps_by_name and _resolve_app_label(deps_by_name, directory_label) == app_label:
+            matches.append(mig_dir)
     return matches
 
 
@@ -396,7 +422,8 @@ def _compute_roots_leaves_cross(
 def describe_migration_dependency(app_label: str, root: str) -> dict[str, Any]:
     """Return the migration DAG for a Django app, extracted via pure AST parse.
 
-    :param app_label: the Django app name (folder name that contains ``migrations/``)
+    :param app_label: the Django app label (``AppConfig.label``; the folder
+        name that contains ``migrations/`` when no label is configured)
     :param root: workspace root to scan
     :returns: dict per module docstring. On missing folder, includes ``error``.
     """
@@ -703,13 +730,19 @@ def _resolve_app_label(deps_by_name: dict[str, list[list[str]]], app_label: str)
     migration before a dependency that does not exist), so the labels on those
     tuples are the candidates. Prefer the directory name when it appears, take
     a lone alternative, and stay silent when the evidence is ambiguous.
+
+    A dependency whose name equals the depending file's own name is not a
+    candidate: a migration cannot depend on itself, so such a tuple points
+    at another app's same-named migration (the common case is a lone
+    ``0001_initial`` depending on another app's ``0001_initial``) and says
+    nothing about this app's label.
     """
     local = set(deps_by_name)
     labels = {
         dep[0]
-        for pairs in deps_by_name.values()
+        for own_name, pairs in deps_by_name.items()
         for dep in pairs
-        if len(dep) > 1 and dep[1] in local
+        if len(dep) > 1 and dep[1] in local and dep[1] != own_name
     }
     if app_label in labels:
         return app_label
