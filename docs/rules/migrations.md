@@ -16,7 +16,7 @@ How the rules hold up on real projects: [407 alarms on six big Django codebases,
 
 **Operation:** `AddField` · **Severity:** critical · **Confidence:** high · *populated tables only*
 
-Adds a NOT NULL column (no `null=True`) without a `default` to a model whose table likely has rows; existing rows will raise `IntegrityError` when the migration applies. Auto-created PK fields (`AutoField` / `BigAutoField` / `SmallAutoField`) are exempt.
+Adds a NOT NULL column (no `null=True`) without a `default` to a model whose table likely has rows; existing rows will raise `IntegrityError` when the migration applies. Auto-created PK fields (`AutoField` / `BigAutoField` / `SmallAutoField`) are exempt. When the constructor unpacks field options (`**options`), the finding is `warning` with `low` confidence: the mapping may supply `null=True` or a default, or only a default when `null=False` is already written.
 
 **Mitigation:** Add `null=True` first, backfill via `RunPython`, then a third migration to set `null=False`. Or provide `default=`.
 
