@@ -637,13 +637,19 @@ def _resolve_app_label(deps_by_name: dict[str, list[list[str]]], app_label: str)
     migration before a dependency that does not exist), so the labels on those
     tuples are the candidates. Prefer the directory name when it appears, take
     a lone alternative, and stay silent when the evidence is ambiguous.
+
+    A dependency whose name equals the depending file's own name is not a
+    candidate: a migration cannot depend on itself, so such a tuple points
+    at another app's same-named migration (the common case is a lone
+    ``0001_initial`` depending on another app's ``0001_initial``) and says
+    nothing about this app's label.
     """
     local = set(deps_by_name)
     labels = {
         dep[0]
-        for pairs in deps_by_name.values()
+        for own_name, pairs in deps_by_name.items()
         for dep in pairs
-        if len(dep) > 1 and dep[1] in local
+        if len(dep) > 1 and dep[1] in local and dep[1] != own_name
     }
     if app_label in labels:
         return app_label
