@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **drift sees the columns of treebeard and tree-queries bases.** A model on
+  `treebeard`'s `MP_Node` or `NS_Node`, or on `tree_queries`' `TreeNode`,
+  got none of the columns those bases add (`path`, `depth`, `numchild`;
+  `lft`, `rgt`, `tree_id`, `depth`; `parent`), because the bases live in
+  site-packages. `drift` then reported them as "migrated but no longer
+  declared" on every such model, wagtail's `Page` and `Collection` included,
+  and the ER view left them out. Fixes #351 (#353).
+
 - **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
   and `URLField`**.
   `alter_field_char_length` only matched the exact name `CharField`, so
@@ -26,8 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
   not reach the column.
 
-### Fixed
-
 - **A one-line `class Meta: abstract = True` is read**.
   Only the lines below `class Meta:` were parsed, so options written on the
   header line itself were lost. Such an abstract base was listed as a
@@ -37,8 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
   are now read like the indented ones.
 
-### Fixed
-
 - **`er --format d2` quotes names D2 reserves.** A column named `width`,
   `height`, `label`, `link`, `icon` or another D2 keyword was read as an
   attribute of the table, not as a row: wagtail's image `width` and `height`
@@ -46,15 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named `Label` or `Link` broke the same way. Such names are now quoted, as
   the D2 docs ask.
 
-### Fixed
-
 - **`er` (Mermaid) draws SQLAlchemy foreign key columns.** The default
   Mermaid diagram left every SQLAlchemy foreign key column out of its table,
   so `Address` lost `user_id` and an association table keyed by two foreign
   keys (`order_id, tenant_id`) showed only `tenant_id`. They are now drawn
   with their column type, as DBML, D2, PlantUML and DOT have since #356.
-
-### Fixed
 
 - **A bare `.select_related()` no longer hides a nullable relation from DOL007
   and `nplusone`.** Django's no-argument `select_related()` follows only the
@@ -63,8 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row. Both analyzers read every relation as covered by it. When the schema
   knows the model they now report those accesses; without a schema, a bare
   `.select_related()` still covers every relation. Found in the review of
-
-### Fixed
 
 - **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
   flat `values_list()`.** In
