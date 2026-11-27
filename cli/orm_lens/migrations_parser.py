@@ -1083,8 +1083,8 @@ def _tree_has_data_op(tree: ast.Module) -> bool:
 class MigrationRiskAnalyzer:
     """AST-walk one migration file and emit :class:`MigrationRisk` findings.
 
-    Stateless per call — construct with the enclosing context (app label,
-    migration index within its app, current schema) and call
+    Construct with the enclosing context (app label, migration index within
+    its app, current schema, replayed field lengths) and call
     :meth:`analyze`. The analyzer does not import Django, does not execute
     the migration; it only inspects the ``operations = [...]`` list of the
     ``Migration`` class via ``ast``.
@@ -1098,6 +1098,7 @@ class MigrationRiskAnalyzer:
         migration_index: int,
         current_schema: dict[str, dict[str, set]] | None = None,
         earlier_data_ops: bool = False,
+        field_lengths: dict[tuple[str, str], int] | None = None,
     ) -> None:
         self.file_path = file_path
         self.app = app
@@ -1141,6 +1142,7 @@ class MigrationRiskAnalyzer:
         self.data_op_positions: list[int] = []
         self.created_at: dict[str, int] = {}
         self.module_strings: dict[str, str] = {}
+        self.field_lengths = field_lengths if field_lengths is not None else {}
 
     # ------------------------------------------------------------------
     # Entry
@@ -1183,12 +1185,15 @@ class MigrationRiskAnalyzer:
     # ------------------------------------------------------------------
     def _walk_operations(self, ops_node: ast.AST) -> None:
         if not isinstance(ops_node, (ast.List, ast.Tuple)):
+            self.field_lengths.clear()
             return
         for position, elt in enumerate(ops_node.elts):
             if not isinstance(elt, ast.Call):
+                self.field_lengths.clear()
                 continue
             op = _call_op_name(elt)
             if op is None or op not in _KNOWN_OP_TYPES:
+                self.field_lengths.clear()
                 continue
             if op == "CreateModel":
                 created = _kwarg_literal(elt, "name")
@@ -1213,7 +1218,67 @@ class MigrationRiskAnalyzer:
                     # realistically raise. Never let a single malformed op sink
                     # the run — but propagate MemoryError, KeyboardInterrupt,
                     # SystemExit, or any unexpected class so real bugs surface.
+                    self.field_lengths.clear()
                     continue
+            self._record_field_lengths(op, elt)
+
+    def _record_field_lengths(self, op: str, call: ast.Call) -> None:
+        """Replay known varchar lengths after checking the operation's old state."""
+        if op == "RunSQL":
+            state_ops = _get_kwarg(call, "state_operations")
+            if state_ops is not None and (
+                not isinstance(state_ops, (ast.List, ast.Tuple)) or state_ops.elts
+            ):
+                self.field_lengths.clear()
+            return
+        if op in ("CreateModel", "DeleteModel", "RenameModel"):
+            model = _kwarg_literal(call, "old_name" if op == "RenameModel" else "name")
+            if not isinstance(model, str):
+                self.field_lengths.clear()
+                return
+            model = model.lower()
+            previous = {key: value for key, value in self.field_lengths.items() if key[0] == model}
+            for key in previous:
+                del self.field_lengths[key]
+            if op == "RenameModel":
+                new_name = _kwarg_literal(call, "new_name")
+                if isinstance(new_name, str):
+                    for (_, name), length in previous.items():
+                        self.field_lengths[new_name.lower(), name] = length
+            elif op == "CreateModel":
+                fields = _get_kwarg(call, "fields")
+                if isinstance(fields, (ast.List, ast.Tuple)):
+                    for item in fields.elts:
+                        if isinstance(item, (ast.List, ast.Tuple)) and len(item.elts) == 2:
+                            name = _literal_or_none(item.elts[0])
+                            if isinstance(name, str):
+                                self._set_field_length(model, name, item.elts[1])
+            return
+
+        if op not in ("AddField", "AlterField", "RemoveField", "RenameField"):
+            return
+        model = _kwarg_literal(call, "model_name")
+        name = _kwarg_literal(call, "old_name" if op == "RenameField" else "name")
+        if not isinstance(model, str) or not isinstance(name, str):
+            self.field_lengths.clear()
+            return
+        model = model.lower()
+        if op in ("AddField", "AlterField"):
+            self._set_field_length(model, name, _get_kwarg(call, "field"))
+        elif op in ("RemoveField", "RenameField"):
+            previous_length = self.field_lengths.pop((model, name), None)
+            if op == "RenameField":
+                new_name = _kwarg_literal(call, "new_name")
+                if isinstance(new_name, str) and previous_length is not None:
+                    self.field_lengths[model, new_name] = previous_length
+
+    def _set_field_length(self, model: str, name: str, node: ast.AST | None) -> None:
+        self.field_lengths.pop((model, name), None)
+        field = _field_call(node)
+        if field is not None and (_field_type(field) or "").endswith(_CHAR_FIELD_SUFFIXES):
+            length = _kwarg_literal(field, "max_length")
+            if isinstance(length, int):
+                self.field_lengths[model, name] = length
 
     # ------------------------------------------------------------------
     # Helpers to record findings
@@ -1682,16 +1747,31 @@ class MigrationRiskAnalyzer:
         # EmailField and URLField are CharFields too (a varchar column), and
         # so are project subclasses named like them.
         if field_type.endswith(_CHAR_FIELD_SUFFIXES) and isinstance(max_len, int):
-            self._add(
-                call,
-                "AlterField",
-                rule="alter_field_char_length",
-                description=(
+            previous_length = (
+                self.field_lengths.get((model.lower(), name))
+                if isinstance(model, str) and isinstance(name, str)
+                else None
+            )
+            if previous_length is not None and max_len >= previous_length:
+                return
+            if previous_length is not None:
+                description = (
+                    f"Narrows '{model}.{name}' to {field_type}(max_length={max_len}), "
+                    f"{previous_length} → {max_len}; rows longer than {max_len} chars "
+                    "will fail. Postgres may rewrite the table under an ACCESS EXCLUSIVE lock."
+                )
+            else:
+                description = (
                     f"Alters '{model}.{name}' to {field_type}(max_length="
                     f"{max_len}); if this narrows the column, rows longer "
                     f"than {max_len} chars will fail; either way Postgres "
                     f"may rewrite the table under an ACCESS EXCLUSIVE lock."
-                ),
+                )
+            self._add(
+                call,
+                "AlterField",
+                rule="alter_field_char_length",
+                description=description,
                 mitigation=(
                     "Verify no existing row exceeds the new length. Use "
                     "ALTER TABLE ... ALTER COLUMN ... TYPE with USING and "
@@ -1961,12 +2041,32 @@ def analyze_migration_risks(
         ordered = _replay_order(trees, app_label=app_label, infer_label=not has_configured_label)
         ordered_files = [path for path, _tree in ordered]
         parsed = [m for m in (_describe_migration(p, t) for p, t in ordered) if m]
+        effective_label = (
+            app_label
+            if has_configured_label
+            else _resolve_app_label({m["name"]: m["dependencies"] for m in parsed}, app_label)
+        )
+        deps_unknown = unreadable or any(m.get("dependencies_unknown") for m in parsed)
+        known_migrations = {m["name"] for m in parsed}
+        # Missing/opaque migrations and replacement histories cannot safely
+        # share lengths. Only operations within the same file share knowledge.
+        complete_history = (
+            bool(effective_label)
+            and not deps_unknown
+            and not any(m.get("replaces") for m in parsed)
+            and all(
+                app != effective_label or name in known_migrations
+                for migration in parsed
+                for app, name in migration["dependencies"]
+            )
+        )
 
         app_findings: list[tuple[int, MigrationRisk]] = []
         # (migration index, line, model, field-or-None) for every operation in
         # the app that brings a name (back) into existence.
         introduced: list[tuple[int, int, str, str | None]] = []
         seen_data_op = False
+        field_lengths: dict[tuple[str, str], int] = {}
         for idx, (path, tree) in enumerate(ordered):
             analyzer = MigrationRiskAnalyzer(
                 file_path=path,
@@ -1975,6 +2075,7 @@ def analyze_migration_risks(
                 migration_index=idx,
                 current_schema=current_schema,
                 earlier_data_ops=seen_data_op,
+                field_lengths=field_lengths if complete_history else None,
             )
             app_findings.extend((idx, f) for f in analyzer.analyze())
             introduced.extend((idx, line, m, fl) for line, m, fl in analyzer.introduced)
@@ -2004,12 +2105,6 @@ def analyze_migration_risks(
             # its parent looks like a leaf. We cannot tell the graph's shape,
             # so stay silent for the app. A file that does not parse (e.g.
             # Python 3.14 syntax on an older interpreter) leaves the same hole.
-            effective_label = (
-                app_label
-                if has_configured_label
-                else _resolve_app_label({m["name"]: m["dependencies"] for m in parsed}, app_label)
-            )
-            deps_unknown = unreadable or any(m.get("dependencies_unknown") for m in parsed)
             leaves = (
                 _compute_roots_leaves_cross(
                     _collapse_squashed(parsed, effective_label), effective_label
