@@ -1834,6 +1834,11 @@ def _walk_for_accesses(
             manager_ops = tuple(method for method, _call in calls)
             if chain and chain[0] == loop_var and len(chain) >= 2:
                 first_attr = chain[1]
+                if first_attr in _MODEL_INTERNALS or first_attr.startswith("__"):
+                    for _method, call in calls:
+                        for argument in (*call.args, *call.keywords):
+                            _walk_for_accesses(argument, loop_var, hits)
+                    return
                 access_path = "__".join(chain[1:])
                 kind_hint = "reverse" if _REVERSE_MANAGER_SUFFIX.search(first_attr) else "m2m"
                 hits.append((access_path, kind_hint, manager_ops))

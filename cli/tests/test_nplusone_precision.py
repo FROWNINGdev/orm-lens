@@ -498,6 +498,7 @@ def test_unknown_loop_model_skips_model_internals_and_dunders(tmp_path: Path) ->
         "    for score in review.scores.all():\n"
         "        print(score._meta.get_field('label').verbose_name)\n"
         "        print(score._state.adding, score._prefetched_objects_cache)\n"
+        "        print(list(score._prefetched_objects_cache.values()))\n"
         "\n"
         "\n"
         "def tags(value):\n"
