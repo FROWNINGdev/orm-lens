@@ -106,6 +106,7 @@ BARE_FIELD_TYPES = "|".join(
         "AutoField", "BigAutoField", "SmallAutoField",
         "ForeignKey", "OneToOneField", "ManyToManyField",
         "TaggableManager",
+        "GenericForeignKey",
         "TreeForeignKey", "TreeOneToOneField", "TreeManyToManyField",
     ]
 )

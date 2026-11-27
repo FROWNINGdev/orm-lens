@@ -91,6 +91,12 @@ test('parity fixture — model shape matches golden expectations', () => {
   assert.equal(tagsField.relatedModel, 'Tag');
   assert.equal(tagsField.throughModel, 'BookTag');
 
+  const tag = models[2];
+  assert.deepEqual(
+    tag.fields.map((f) => [f.name, f.type, f.isRelation]),
+    [['name', 'SlugField', false], ['content_object', 'GenericForeignKey', false]],
+  );
+
   const bookTag = models[3];
   assert.equal(bookTag.fields.length, 2);
   assert.equal(bookTag.fields[0].name, 'book');

@@ -576,12 +576,14 @@ def _field_type(call: ast.Call) -> str | None:
 
 
 # Field classes that add no column to the model's own table: a join table
-# (M2M and its third-party twins) or nothing at all (GenericRelation).
+# (M2M and its third-party twins) or nothing at all (GenericRelation,
+# GenericForeignKey).
 _NO_COLUMN_FIELDS = frozenset(
     {
         "ManyToManyField",
         "TaggableManager",
         "GenericRelation",
+        "GenericForeignKey",
         "ParentalManyToManyField",
         "SortedManyToManyField",
         "TreeManyToManyField",
@@ -914,7 +916,11 @@ def _build_current_schema(
             # drift. Reported as #58 against django-guardian, where four such
             # fields read as "migrated but no longer declared".
             name = model.name.lower()
-            app_map[name] = {f.name for f in model.all_fields()}
+            # A GenericForeignKey is a private field: Django never writes it
+            # to a migration, so it is not a declared column.
+            app_map[name] = {
+                f.name for f in model.all_fields() if f.type != "GenericForeignKey"
+            }
             if parent_links is not None:
                 parent_links.setdefault(app_label, {})[name] = model.implicit_parent_links
     return schema

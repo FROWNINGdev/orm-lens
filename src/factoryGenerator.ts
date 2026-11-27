@@ -90,6 +90,9 @@ function providerFor(field: ParsedField): string {
     case 'SmallAutoField':
       // factory_boy leaves auto-pk to the DB; skip.
       return '';
+    case 'GenericForeignKey':
+      // No column: set content_type and object_id instead.
+      return '';
     case 'CharField': {
       const maxLen = matchIntKwarg(field.args, 'max_length') ?? 100;
       if (maxLen <= 20) return `factory.Faker('word')`;

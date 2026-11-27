@@ -1579,6 +1579,12 @@ class NPlusOneScanner(ast.NodeVisitor):
                 uncovered_m2m.append(attr)
                 if model_root is not None or kind_hint == "reverse":
                     confidence = "high"
+            elif kind == "gfk":
+                # select_related() cannot follow a GenericForeignKey; only
+                # prefetch_related() loads it.
+                if attr not in prefetch_set:
+                    uncovered_m2m.append(attr)
+                    confidence = "high"
             else:
                 # unknown — treat as medium-confidence FK guess when the
                 # access was ``target.attr.something`` (chain of length>=2)
@@ -1587,6 +1593,9 @@ class NPlusOneScanner(ast.NodeVisitor):
                     if "*" not in prefetch_set and attr not in prefetch_set:
                         uncovered_m2m.append(attr)
                         confidence = "high"
+                elif kind_hint == "chain" and self._kind_on_every_model(attr) == {"gfk"}:
+                    if attr not in prefetch_set:
+                        uncovered_m2m.append(attr)
                 elif (
                     kind_hint == "chain"
                     and "*" not in select_set
@@ -1632,10 +1641,13 @@ class NPlusOneScanner(ast.NodeVisitor):
             )
         )
 
+    def _kind_on_every_model(self, attr: str) -> set[str]:
+        """Every kind the models that declare ``attr`` give it."""
+        return {attrs[attr] for attrs in self.models_schema.values() if attr in attrs}
+
     def _scalar_on_every_model(self, attr: str) -> bool:
         """True when ``attr`` exists in the schema and every model that has it says scalar."""
-        kinds = {attrs[attr] for attrs in self.models_schema.values() if attr in attrs}
-        return kinds == {"scalar"}
+        return self._kind_on_every_model(attr) == {"scalar"}
 
     def _relation_hops(
         self, model: str | None, parts: list[str],
@@ -1691,7 +1703,7 @@ class NPlusOneScanner(ast.NodeVisitor):
         attr: str,
         kind_hint: str | None,
     ) -> str | None:
-        """Return ``"fk" | "o2o" | "reverse_o2o" | "m2m" | "reverse" | "scalar" | None``.
+        """Return ``"fk" | "o2o" | "reverse_o2o" | "m2m" | "reverse" | "gfk" | "scalar" | None``.
 
         Uses the parsed schema when the source model is known; falls back
         to ``kind_hint`` (from the access pattern) otherwise.
@@ -1869,7 +1881,7 @@ def _walk_for_accesses(
 def _build_schema_from_index(index: WorkspaceIndex) -> dict[str, dict[str, str]]:
     """Flatten a ``WorkspaceIndex`` into ``{ModelName: {attr: kind}}``.
 
-    ``kind`` in ``{"fk", "o2o", "reverse_o2o", "m2m", "reverse", "scalar"}``. Reverse
+    ``kind`` in ``{"fk", "o2o", "reverse_o2o", "m2m", "reverse", "gfk", "scalar"}``. Reverse
     relations (``<related_name>`` or default ``<model_lower>_set``) are
     computed by walking every FK/O2O/M2M in the workspace.
     """
@@ -1878,6 +1890,9 @@ def _build_schema_from_index(index: WorkspaceIndex) -> dict[str, dict[str, str]]
         for model in app.models:
             attrs = schema.setdefault(model.name, {})
             for f in model.fields:
+                if getattr(f, "type", None) == "GenericForeignKey":
+                    attrs[f.name] = "gfk"
+                    continue
                 if not f.is_relation:
                     attrs[f.name] = "scalar"
                     continue
@@ -2012,6 +2027,9 @@ def _build_schema_from_index_dict(payload: dict[str, Any]) -> dict[str, dict[str
             for f in model.get("fields", []):
                 fname = f.get("name")
                 if not fname:
+                    continue
+                if f.get("type") == "GenericForeignKey":
+                    attrs[fname] = "gfk"
                     continue
                 if not f.get("isRelation"):
                     attrs[fname] = "scalar"

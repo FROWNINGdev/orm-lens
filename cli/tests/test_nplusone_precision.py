@@ -489,3 +489,68 @@ def test_unknown_loop_model_still_guesses_names_that_are_a_relation_somewhere(tm
     (finding,) = scan_for_nplusone(str(tmp_path), schema)
     assert finding.accessed == ["owner", "missing"]
     assert finding.confidence == "medium"
+
+
+GFK_MODELS = (
+    "from django.contrib.contenttypes.fields import GenericForeignKey\n"
+    "from django.contrib.contenttypes.models import ContentType\n"
+    "from django.db import models\n"
+    "\n"
+    "\n"
+    "class Article(models.Model):\n"
+    "    title = models.CharField(max_length=100)\n"
+    "\n"
+    "\n"
+    "class ArticleForObject(models.Model):\n"
+    "    article = models.ForeignKey(Article, on_delete=models.CASCADE)\n"
+    "    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)\n"
+    "    object_id = models.PositiveIntegerField()\n"
+    '    content_object = GenericForeignKey("content_type", "object_id")\n'
+    "    is_mptt = models.BooleanField(default=False)\n"
+)
+
+
+def test_generic_foreign_key_on_a_reverse_manager_is_prefetched(tmp_path: Path) -> None:
+    # django-wiki models/article.py: select_related() cannot follow a
+    # GenericForeignKey and raises FieldError.
+    _write(tmp_path / "wiki" / "models.py", GFK_MODELS)
+    _write(
+        tmp_path / "wiki" / "views.py",
+        "def ancestors(article):\n"
+        "    for obj in article.articleforobject_set.filter(is_mptt=True):\n"
+        "        yield from obj.content_object.get_ancestors()\n",
+    )
+    index = scan_workspace(str(tmp_path))
+    for schema in (index, index.to_dict()):
+        (finding,) = scan_for_nplusone(str(tmp_path), schema)
+        assert finding.line == 2
+        assert finding.accessed == ["content_object"]
+        assert finding.suggested_fix == '.prefetch_related("content_object")'
+
+
+def test_generic_foreign_key_on_a_known_model_is_prefetched(tmp_path: Path) -> None:
+    _write(tmp_path / "wiki" / "models.py", GFK_MODELS)
+    _write(
+        tmp_path / "wiki" / "views.py",
+        "from .models import ArticleForObject\n"
+        "\n"
+        "\n"
+        "def objects():\n"
+        "    for obj in ArticleForObject.objects.select_related(\"content_object\"):\n"
+        "        print(obj.content_object.pk, obj.article.title)\n"
+        "    for obj in ArticleForObject.objects.prefetch_related(\"content_object\"):\n"
+        "        print(obj.content_object.pk)\n",
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), scan_workspace(str(tmp_path)))
+    assert finding.line == 5
+    assert finding.accessed == ["article", "content_object"]
+    assert finding.confidence == "high"
+    assert finding.suggested_fix == '.select_related("article").prefetch_related("content_object")'
+
+
+def test_describe_shows_a_generic_foreign_key(tmp_path: Path) -> None:
+    _write(tmp_path / "wiki" / "models.py", GFK_MODELS)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert main(["describe", "ArticleForObject", "--path", str(tmp_path)]) == 0
+    assert '| `content_object` | GenericForeignKey | `"content_type", "object_id"` |' in out.getvalue()

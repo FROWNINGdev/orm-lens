@@ -825,6 +825,27 @@ class DetectDriftTest(unittest.TestCase):
 
         self.assertEqual(detect_drift(self.root).drifted, [])
 
+    def test_generic_foreign_key_is_not_a_migrated_column(self) -> None:
+        # Django never writes a GenericForeignKey to a migration.
+        (self.root / "blog" / "models.py").write_text(
+            "from django.contrib.contenttypes.fields import GenericForeignKey\n"
+            "from django.db import models\n\n"
+            "class Post(models.Model):\n"
+            "    title = models.CharField(max_length=100)\n"
+            "    object_id = models.PositiveIntegerField()\n"
+            '    content_object = GenericForeignKey("content_type", "object_id")\n',
+            encoding="utf-8",
+        )
+        (self.root / "blog" / "migrations" / "0002_object_id.py").write_text(
+            _migration(
+                '        migrations.AddField(model_name="post", name="object_id", field=None),\n',
+                '[("blog", "0001_initial")]',
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(detect_drift(self.root).drifted, [])
+
     def test_mptt_generated_tree_fields_do_not_report_drift(self) -> None:
         blog = self.root / "blog"
         (blog / "models.py").write_text(

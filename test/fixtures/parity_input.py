@@ -2,6 +2,7 @@
 from django.db.models import TextField as ExampleField
 """
 
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField, HStoreField as PgHStore, IntegerRangeField
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
@@ -48,6 +49,7 @@ class Book(models.Model):
 
 class Tag(models.Model):
     name = models.SlugField()
+    content_object = GenericForeignKey('content_type', 'object_id')
 
 
 class BookTag(models.Model):
