@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [py-1.18.5] - 2026-11-27
+
+> Findings in GitLab merge requests; treebeard columns in drift.
+
 ### Added
 
 - **`--format gitlab`: GitLab Code Quality reports.** `migration-risk`,
@@ -18,12 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new. Ready-made jobs live in `templates/migration-risk.yml` and
   `templates/nplusone.yml`; they take `spec:inputs` (stage, Python version,
   orm-lens version, path, severity or confidence, extra arguments) and work
-  through `include:remote` or as a CI/CD component.
+  through `include:remote` or as a CI/CD component ([#381](https://github.com/FROWNINGdev/orm-lens/pull/381)).
 
 - **Simplified Chinese translations for the queryset rules.** The documentation
   for `DOL001` through `DOL007` is now available in Simplified Chinese and
   linked from the locale index, the Chinese README and the complete rule
-  reference. Refs #81.
+  reference. Refs #81 ([#361](https://github.com/FROWNINGdev/orm-lens/pull/361)).
 
 ### Fixed
 
@@ -43,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new length make the migration fail the same way. The rule now covers
   Django's CharField subclasses and project fields named like them
   (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
-  not reach the column.
+  not reach the column ([#367](https://github.com/FROWNINGdev/orm-lens/pull/367)).
 
 - **A one-line `class Meta: abstract = True` is read**.
   Only the lines below `class Meta:` were parsed, so options written on the
@@ -52,20 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed with "declared, but no migration creates it" for the base and
   "migrated but no longer declared" for the inherited columns. Options after
   the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
-  are now read like the indented ones.
+  are now read like the indented ones ([#366](https://github.com/FROWNINGdev/orm-lens/pull/366)).
 
 - **`er --format d2` quotes names D2 reserves.** A column named `width`,
   `height`, `label`, `link`, `icon` or another D2 keyword was read as an
   attribute of the table, not as a row: wagtail's image `width` and `height`
   made `d2` reject the file, and a `label` column renamed the table. A model
   named `Label` or `Link` broke the same way. Such names are now quoted, as
-  the D2 docs ask.
+  the D2 docs ask ([#365](https://github.com/FROWNINGdev/orm-lens/pull/365)).
 
 - **`er` (Mermaid) draws SQLAlchemy foreign key columns.** The default
   Mermaid diagram left every SQLAlchemy foreign key column out of its table,
   so `Address` lost `user_id` and an association table keyed by two foreign
   keys (`order_id, tenant_id`) showed only `tenant_id`. They are now drawn
-  with their column type, as DBML, D2, PlantUML and DOT have since #356.
+  with their column type, as DBML, D2, PlantUML and DOT have since #356
+  ([#364](https://github.com/FROWNINGdev/orm-lens/pull/364)).
 
 - **A bare `.select_related()` no longer hides a nullable relation from DOL007
   and `nplusone`.** Django's no-argument `select_related()` follows only the
@@ -74,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row. Both analyzers read every relation as covered by it. When the schema
   knows the model they now report those accesses; without a schema, a bare
   `.select_related()` still covers every relation. Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#363](https://github.com/FROWNINGdev/orm-lens/pull/363)).
 
 - **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
   flat `values_list()`.** In
@@ -85,7 +91,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.first()` on a flat `values_list()` returns the first value, which is also
   `None` when that row holds NULL, so DOL003 and DOL004 no longer flag it.
   Found in the review of
-  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361).
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#362](https://github.com/FROWNINGdev/orm-lens/pull/362)).
+
+## [0.22.5] - 2026-11-27
+
+> Quick fixes for count() comparisons keep the whole queryset chain.
+
+### Fixed
+
+- **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
+  flat `values_list()`.** In
+  `Order.objects.filter(user=user).order_by("-id").count() == 0` the rules
+  matched from `order_by`, so the DOL002 and DOL003 QuickFixes, which may
+  auto-apply, wrote
+  `Order.objects.filter(user=user).not order_by("-id").exists()`, a
+  SyntaxError, and the operator checks looked at the `.` before `order_by`.
+  `.first()` on a flat `values_list()` returns the first value, which is also
+  `None` when that row holds NULL, so DOL003 and DOL004 no longer flag it.
+  Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#362](https://github.com/FROWNINGdev/orm-lens/pull/362)).
+
+
+- **A bare `.select_related()` no longer hides a nullable relation from DOL007
+  and `nplusone`.** Django's no-argument `select_related()` follows only the
+  non-null foreign keys and one-to-one fields declared on the model; a
+  nullable one and the reverse side of a one-to-one still cost a query per
+  row. Both analyzers read every relation as covered by it. When the schema
+  knows the model they now report those accesses; without a schema, a bare
+  `.select_related()` still covers every relation. Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#363](https://github.com/FROWNINGdev/orm-lens/pull/363)).
+
+### Changed
+
+- **ER view runs on @xyflow/react 13** ([#350](https://github.com/FROWNINGdev/orm-lens/pull/350)). No visible change;
+  the graph library moved to its current major version.
 
 ## [py-1.18.4] - 2026-11-24
 
