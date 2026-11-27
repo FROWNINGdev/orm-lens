@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Simplified Chinese translations for the queryset rules.** The documentation
+  for `DOL001` through `DOL007` is now available in Simplified Chinese and
+  linked from the locale index, the Chinese README and the complete rule
+  reference. Refs #81.
+
+### Fixed
+
+- **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
+  and `URLField`**.
+  `alter_field_char_length` only matched the exact name `CharField`, so
+  `AlterField(..., field=models.EmailField(max_length=100))` got no finding,
+  although these fields are varchar columns and existing rows longer than
+  the new length make the migration fail the same way. The rule now covers
+  Django's CharField subclasses and project fields named like them
+  (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
+  not reach the column.
+
+### Fixed
+
+- **A one-line `class Meta: abstract = True` is read**.
+  Only the lines below `class Meta:` were parsed, so options written on the
+  header line itself were lost. Such an abstract base was listed as a
+  concrete model, its fields were missing from every subclass, and `drift`
+  failed with "declared, but no migration creates it" for the base and
+  "migrated but no longer declared" for the inherited columns. Options after
+  the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
+  are now read like the indented ones.
+
 ### Fixed
 
 - **`er --format d2` quotes names D2 reserves.** A column named `width`,
