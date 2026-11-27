@@ -834,6 +834,9 @@ _RELATED_WRITE_METHODS = frozenset({
     "aadd", "aremove", "aset", "aclear", "acreate", "aget_or_create",
 })
 
+# Django model instance internals and dunders are never ORM relations.
+_MODEL_INTERNALS = frozenset({"_meta", "_state", "_prefetched_objects_cache"})
+
 
 def _is_test_file(rel: Path) -> bool:
     """Test modules and anything under a ``tests`` / ``test`` directory.
@@ -1851,6 +1854,8 @@ def _walk_for_accesses(
             chain = chain[:-1]
         if chain and chain[0] == loop_var and len(chain) >= 2:
             first_attr = chain[1]
+            if first_attr in _MODEL_INTERNALS or first_attr.startswith("__"):
+                return
             if _REVERSE_MANAGER_SUFFIX.search(first_attr):
                 hits.append(("__".join(chain[1:]), "reverse", ()))
             elif len(chain) >= 3:
