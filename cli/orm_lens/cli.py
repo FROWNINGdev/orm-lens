@@ -29,11 +29,14 @@ from pathlib import Path
 
 from . import __version__
 from .alembic_risk import analyze_alembic_risks
-from .blast_radius import analyze_blast_radius, format_blast_radius
+from .blast_radius import _matches_filter, analyze_blast_radius, format_blast_radius
 from .ci_formats import (
+    blast_radius_gitlab,
     migration_risks_github,
+    migration_risks_gitlab,
     migration_risks_sarif,
     nplusone_github,
+    nplusone_gitlab,
     nplusone_sarif,
 )
 from .diff import diff_schemas, format_diff
@@ -41,6 +44,7 @@ from .drift import LEGEND_LINES as DRIFT_LEGEND_LINES
 from .drift import detect_drift, format_drift
 from .er_formats import ER_BUILDERS
 from .er_formats import _columns as _er_columns
+from .er_formats import _is_column as _er_is_column
 from .formatters import format_hover, format_index, format_model
 from .impact import group_by_layer, scan_impact
 from .migrations_parser import analyze_migration_risks, describe_migration_dependency
@@ -50,6 +54,7 @@ from .models import (
     cascade_preview,
     find_model,
     find_user_model,
+    related_model_app,
     resolve_related_tail,
 )
 from .parser import DEFAULT_EXCLUDES, _iter_python_files, scan_workspace
@@ -260,11 +265,19 @@ def _cmd_nplusone(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps([f.to_dict() for f in findings], indent=2, ensure_ascii=False))
     elif args.format == "sarif":
-        print(json.dumps(nplusone_sarif(findings), indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                nplusone_sarif(findings, root=args.path), indent=2, ensure_ascii=False
+            )
+        )
     elif args.format == "github":
-        annotations = nplusone_github(findings)
+        annotations = nplusone_github(findings, root=args.path)
         if annotations:
             print(annotations)
+    elif args.format == "gitlab":
+        print(json.dumps(
+            nplusone_gitlab(findings, root=args.path), indent=2, ensure_ascii=False
+        ))
     else:
         if not findings:
             print("No N+1 anti-patterns detected.")
@@ -280,9 +293,30 @@ def _cmd_nplusone(args: argparse.Namespace) -> int:
 _SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 
 
+def _only_paths(paths: Sequence[str], root: str) -> set[str] | None:
+    """Both spellings of each path: as given, and resolved (from the cwd and
+    from ``root``), so it matches however the scan spelled ``file_path``."""
+    if not paths:
+        return None
+    root_path = Path(root).resolve()
+    only: set[str] = set()
+    for p in paths:
+        only.add(p)
+        with contextlib.suppress(OSError):
+            only.add(str(Path(p).resolve()))
+            if not Path(p).is_absolute():
+                only.add(str((root_path / p).resolve()))
+    return only
+
+
 def _cmd_migration_risk(args: argparse.Namespace) -> int:
     """Analyze Django migrations and Alembic revisions for operations dangerous in production."""
     findings = analyze_migration_risks(args.path) + analyze_alembic_risks(args.path)
+    # Every migration is analyzed (leaf conflicts and earlier RunPython need
+    # the whole history); only the report is narrowed to the given files.
+    only = _only_paths([*args.only, *args.files], args.path)
+    if only is not None:
+        findings = [f for f in findings if _matches_filter(f, only)]
     findings.sort(key=lambda r: (_SEVERITY_ORDER.get(r.severity, 99), r.file_path, r.line_number))
     if args.severity != "all":
         threshold = _SEVERITY_ORDER[args.severity]
@@ -306,6 +340,12 @@ def _cmd_migration_risk(args: argparse.Namespace) -> int:
         annotations = migration_risks_github(findings, root=args.path)
         if annotations:
             print(annotations)
+    elif args.format == "gitlab":
+        print(json.dumps(
+            migration_risks_gitlab(findings, root=args.path),
+            indent=2,
+            ensure_ascii=False,
+        ))
     else:
         if not findings:
             print("No risky migration operations found.")
@@ -560,6 +600,12 @@ def _cmd_blast_radius(args: argparse.Namespace) -> int:
 
     if args.format == "json":
         print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    elif args.format == "gitlab":
+        print(json.dumps(
+            blast_radius_gitlab(report, str(Path(args.path).resolve())),
+            indent=2,
+            ensure_ascii=False,
+        ))
     else:
         rendered = format_blast_radius(report, args.format, args.path)
         if rendered:
@@ -656,21 +702,14 @@ def _build_mermaid(index: WorkspaceIndex) -> str:
             return safe(f"{app_name}.{model_name}")
         return safe(model_name)
 
-    def target_app(related_model: str, tail: str, source_app: str) -> str:
-        apps = apps_by_name[tail]
-        if "." in related_model:
-            label = related_model.rsplit(".", 1)[0]
-            if label in apps:
-                return label
-        if source_app in apps:
-            return source_app
-        return apps[0]
-
     for app in index.apps:
         for model in app.models:
             lines.append(f"  {entity(app.name, model.name)} {{")
             for f in _er_columns(model):
-                if f.is_relation:
+                # A SQLAlchemy foreign key is a typed column of the table
+                # (often part of its primary key); only Django relation
+                # fields and relationship() attributes are edges alone.
+                if not _er_is_column(model, f):
                     continue
                 type_safe = "".join(ch for ch in f.type if ch.isalnum())
                 name_safe = safe(f.name)
@@ -692,7 +731,10 @@ def _build_mermaid(index: WorkspaceIndex) -> str:
                     if tail is None or tail not in apps_by_name:
                         continue
                     target = entity(
-                        target_app(f.related_model, tail, app.name), tail
+                        related_model_app(
+                            f.related_model, tail, app.name, apps_by_name[tail]
+                        ),
+                        tail,
                     )
                 if f.relation_kind == "ManyToManyField":
                     arrow = "}o--o{"
@@ -705,7 +747,9 @@ def _build_mermaid(index: WorkspaceIndex) -> str:
                     parts.append(sanitize_label(f.on_delete))
                 if f.through_model:
                     parts.append(f"through {sanitize_label(f.through_model)}")
-                if f.related_name:
+                # related_name="+" (or "foo+") turns the reverse accessor off,
+                # so there is no name to show.
+                if f.related_name and not f.related_name.endswith("+"):
                     parts.append(f"as {sanitize_label(f.related_name)}")
                 label = (
                     f"{parts[0]} [{', '.join(parts[1:])}]"
@@ -808,12 +852,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scan_flags(npo)
     npo.add_argument(
         "--format", "-f",
-        choices=("text", "json", "sarif", "github"),
+        choices=("text", "json", "sarif", "github", "gitlab"),
         default="text",
         help=(
             "Output format. 'sarif' emits SARIF 2.1.0 for GitHub Code "
             "Scanning; 'github' emits ::warning workflow commands for "
-            "zero-setup PR annotations"
+            "zero-setup PR annotations; 'gitlab' emits a GitLab Code "
+            "Quality report for artifacts:reports:codequality"
         ),
     )
     npo.add_argument(
@@ -848,12 +893,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scan_flags(mrisk)
     mrisk.add_argument(
         "--format", "-f",
-        choices=("text", "json", "sarif", "github"),
+        choices=("text", "json", "sarif", "github", "gitlab"),
         default="text",
         help=(
             "Output format. 'sarif' emits SARIF 2.1.0 for GitHub Code "
             "Scanning; 'github' emits ::error/::warning workflow commands "
-            "for zero-setup PR annotations"
+            "for zero-setup PR annotations; 'gitlab' emits a GitLab Code "
+            "Quality report for artifacts:reports:codequality"
         ),
     )
     mrisk.add_argument(
@@ -866,6 +912,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--exit-zero",
         action="store_true",
         help="Always exit 0 even when critical findings are present",
+    )
+    mrisk.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="MIGRATION",
+        help=(
+            "Report only findings in these migration files (repeatable). The "
+            "whole history is still analyzed. Default: every migration"
+        ),
+    )
+    mrisk.add_argument(
+        "files",
+        nargs="*",
+        default=[],
+        metavar="FILE",
+        help=(
+            "Same as --only, as positional paths: the pre-commit hook passes "
+            "the staged migration files here"
+        ),
     )
     mrisk.set_defaults(func=_cmd_migration_risk)
 
@@ -959,11 +1025,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scan_flags(blast)
     blast.add_argument(
         "--format", "-f",
-        choices=("text", "json", "markdown", "github"),
+        choices=("text", "json", "markdown", "github", "gitlab"),
         default="text",
         help=(
             "Output format. 'markdown' is a ready-to-post PR comment; "
-            "'github' emits ::error/::warning workflow commands"
+            "'github' emits ::error/::warning workflow commands; 'gitlab' "
+            "emits a GitLab Code Quality report"
         ),
     )
     blast.add_argument(

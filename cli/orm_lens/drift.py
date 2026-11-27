@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from .migrations_parser import (
+    OPERATION_ARGS,
     _build_current_schema,
     _configured_app_label,
     _find_all_migration_apps,
@@ -59,17 +60,8 @@ _STRUCTURAL_OPS = frozenset(
     }
 )
 
-# Django binds these constructor arguments in the order below. ``makemigrations``
-# spells them out as keywords, but hand-written migrations often pass them
-# positionally — both forms must land in the same slots (#303).
-_POSITIONAL: dict[str, tuple[str, ...]] = {
-    "CreateModel": ("name", "fields"),
-    "DeleteModel": ("name",),
-    "RenameModel": ("old_name", "new_name"),
-    "AddField": ("model_name", "name", "field"),
-    "RemoveField": ("model_name", "name"),
-    "RenameField": ("model_name", "old_name", "new_name"),
-}
+# Django's argument order per operation (#303), shared with migration-risk.
+_POSITIONAL = OPERATION_ARGS
 
 # Django adds these itself unless told otherwise, so a migration that omits
 # them is not drift.
@@ -476,6 +468,7 @@ def detect_drift(
         tests. Built from the workspace parser when omitted.
     """
     root = str(Path(project_root).resolve())
+    parent_links: dict[str, dict[str, set[str]]] = {}
 
     # Group by the app's label, not its folder name: a literal
     # `AppConfig.label` wins and the folder name is the fallback, exactly as
@@ -495,7 +488,9 @@ def detect_drift(
 
     if declared is None:
         declared = _build_current_schema(
-            root, app_labels_by_package=app_labels_by_package
+            root,
+            app_labels_by_package=app_labels_by_package,
+            parent_links=parent_links,
         )
 
     report = DriftReport()
@@ -524,6 +519,7 @@ def detect_drift(
     for app_label, migrated in merged.items():
         seen_apps.add(app_label)
         declared_app = declared.get(app_label, {})
+        inferred_links = parent_links.get(app_label, {})
 
         for model, migrated_fields in migrated.items():
             declared_fields = declared_app.get(model)
@@ -534,7 +530,11 @@ def detect_drift(
                 continue
             declared_set = set(declared_fields) - _IMPLICIT_FIELDS
             missing_in_migrations = sorted(declared_set - migrated_fields)
-            missing_in_models = sorted(migrated_fields - declared_set)
+            # The parser can infer the wrong parent if an import is conditional.
+            # Its suggested link can suppress an advisory, but cannot fail CI.
+            missing_in_models = sorted(
+                migrated_fields - _IMPLICIT_FIELDS - declared_set - inferred_links.get(model, set())
+            )
             if missing_in_migrations or missing_in_models:
                 report.drifted.append(
                     ModelDrift(

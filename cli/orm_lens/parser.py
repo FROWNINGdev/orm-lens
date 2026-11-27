@@ -70,6 +70,11 @@ CLASS_START_RE = re.compile(
     r"^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\("
 )
 
+# A call in a base list, e.g. ``ExportModelOperationsMixin("recipe")`` — its
+# result can't be resolved statically, so ``_read_multiline_class`` drops the
+# call and keeps the other bases (issue #335).
+_CALL_IN_BASES_RE = re.compile(r"[A-Za-z_][\w.]*\s*\([^()]*\)")
+
 NON_MODEL_TAIL = re.compile(
     r"^(ModelAdmin|ModelForm|ModelSerializer|ModelChoiceField|"
     r"ModelMultipleChoiceField|Serializer|Form|Admin|View|ViewSet|"
@@ -142,7 +147,17 @@ def _read_multiline_class(lines: Sequence[str], start: int):
         if i > start:
             buffer += " " + src
         if saw_open and depth == 0:
-            m = CLASS_RE.match(buffer)
+            head, _paren, rest = buffer.partition("(")
+            while True:
+                # ``Mixin("label")`` in a base list is a call whose result
+                # can't be resolved statically; drop it, keep the other bases.
+                # The loop strips nested calls from the inside out, so
+                # ``Mixin(get_label("x"))`` is dropped in two passes.
+                stripped = _CALL_IN_BASES_RE.sub("", rest)
+                if stripped == rest:
+                    break
+                rest = stripped
+            m = CLASS_RE.match(head + "(" + rest)
             if m:
                 return m, i
             return None, i
@@ -990,6 +1005,7 @@ def _collect_defs(
 
             is_mptt_meta = line_indent == indent and bool(re.match(r"class\s+MPTTMeta\b", stripped))
             if not cond_stack and (rx["META_START_RE"].match(inner) or is_mptt_meta):
+                meta_items = _inline_meta_items(stripped)
                 k = j + 1
                 while k < len(lines):
                     if k in in_string:
@@ -1001,18 +1017,19 @@ def _collect_defs(
                     m2 = rx["META_ITEM_RE"].match(ml)
                     if m2:
                         value, k = _read_meta_value(lines, k, m2.group(2))
-                        key = m2.group(1)
-                        if not is_mptt_meta:
-                            model.meta[key] = value
-                        elif key in _MPTT_FIELD_DEFAULTS:
-                            try:
-                                field_name = ast.literal_eval(value)
-                            except (ValueError, SyntaxError):
-                                field_name = None
-                            model.mptt_field_names[key] = (
-                                field_name if isinstance(field_name, str) and field_name else None
-                            )
+                        meta_items.append((m2.group(1), value))
                     k += 1
+                for key, value in meta_items:
+                    if not is_mptt_meta:
+                        model.meta[key] = value
+                    elif key in _MPTT_FIELD_DEFAULTS:
+                        try:
+                            field_name = ast.literal_eval(value)
+                        except (ValueError, SyntaxError):
+                            field_name = None
+                        model.mptt_field_names[key] = (
+                            field_name if isinstance(field_name, str) and field_name else None
+                        )
                 j = k
                 continue
 
@@ -1071,6 +1088,7 @@ def _collect_defs(
                     args=inner.strip(),
                     is_relation=is_rel,
                     line_number=j,
+                    declaration_file=file_path,
                 )
                 if is_rel:
                     parsed_field.relation_kind = relation_kind  # type: ignore[assignment]
@@ -1207,6 +1225,41 @@ def _nested_abstract_defs(
     return out
 
 
+# ``class Meta: abstract = True`` keeps its options on the header line.
+_INLINE_CLASS_BODY_RE = re.compile(r"^class\s+\w+\s*(?:\([^)]*\))?\s*:(.*)$")
+
+
+def _inline_meta_items(header: str) -> list[tuple[str, str]]:
+    """Options written on the ``class Meta:`` line itself, as ``(name, source)``.
+
+    ``class Meta: abstract = True`` is valid Python, but only the lines below
+    the header were read, so such a base came out as a concrete model without
+    its fields reaching the subclasses. The text after the colon is a simple
+    statement list; text that does not parse on its own (a value continued on
+    the next line) is left alone, as before.
+    """
+    match = _INLINE_CLASS_BODY_RE.match(header)
+    body = match.group(1).strip() if match else ""
+    if not body:
+        return []
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return []
+    items: list[tuple[str, str]] = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        source = ast.get_source_segment(body, value)
+        if isinstance(target, ast.Name) and source is not None:
+            items.append((target.id, source))
+    return items
+
+
 def _read_meta_value(
     lines: list[str], start: int, first_line: str
 ) -> tuple[str, int]:
@@ -1244,6 +1297,33 @@ def _read_meta_value(
 
 def _is_abstract(model: ParsedModel) -> bool:
     return model.meta.get("abstract", "").strip() in ("True", "1", "true")
+
+
+def _configured_app_labels(models: Sequence[ParsedModel]) -> dict[Path, str | None]:
+    """Read literal AppConfig labels once for the app directories in *models*."""
+    from .migrations_parser import _configured_app_label
+
+    labels: dict[Path, str | None] = {}
+    for model in models:
+        app_dir, _ = _app_dir_for(model.file_path)
+        path = Path(app_dir).resolve()
+        if path not in labels:
+            labels[path] = _configured_app_label(path)
+    return labels
+
+
+def _effective_app_label(
+    model: ParsedModel, configured_labels: dict[Path, str | None]
+) -> str:
+    raw = model.meta.get("app_label", "").strip()
+    try:
+        label = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        label = None
+    if isinstance(label, str) and label:
+        return label
+    app_dir, _ = _app_dir_for(model.file_path)
+    return configured_labels.get(Path(app_dir).resolve()) or model.app_name
 
 
 def _pick_base(
@@ -1301,6 +1381,13 @@ _MODEL_ROOT_TAIL = re.compile(
     r"|PolymorphicModel|MPTTModel)$"
 )
 _DJANGO_MODEL_MODULE = re.compile(r"^django\.db\.models(\.base)?$")
+_THIRD_PARTY_MODEL_ROOTS: dict[str, tuple[str, ...]] = {
+    "solo.models": ("SingletonModel",),
+    "tree_queries.models": ("TreeNode",),
+    "treebeard.mp_tree": ("MP_Node",),
+    "treebeard.ns_tree": ("NS_Node",),
+    "treebeard.al_tree": ("AL_Node",),
+}
 
 
 def _has_model_ancestry(
@@ -1415,10 +1502,44 @@ _PERMISSIONS_MIXIN = (
     _auth_m2m("user_permissions", "auth.Permission"),
 )
 
+_THIRD_PARTY_BASE_FIELDS: dict[tuple[str, str], tuple[ParsedField, ...]] = {
+    ("treebeard.mp_tree", "MP_Node"): (
+        _django_field("path", "CharField", "max_length=255, unique=True", "MP_Node"),
+        _django_field("depth", "PositiveIntegerField", "", "MP_Node"),
+        _django_field("numchild", "PositiveIntegerField", "default=0", "MP_Node"),
+    ),
+    ("treebeard.ns_tree", "NS_Node"): (
+        _django_field("lft", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("rgt", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("tree_id", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("depth", "PositiveIntegerField", "db_index=True", "NS_Node"),
+    ),
+    ("tree_queries.models", "TreeNode"): (
+        ParsedField(
+            name="parent",
+            type="ForeignKey",
+            args='"self", blank=True, null=True, on_delete=models.CASCADE, related_name="children"',
+            is_relation=True,
+            line_number=0,
+            related_model="self",
+            relation_kind="ForeignKey",
+            related_name="children",
+            on_delete="CASCADE",
+            inherited_from="TreeNode",
+        ),
+    ),
+}
+
 # Fields of django.contrib.auth's abstract bases, which live in site-packages
 # where a workspace scan never looks. ``is_active`` on AbstractBaseUser is a
-# plain class attribute, not a field. A workspace class of the same name wins.
+# plain class attribute, not a field. ``TimeStampedModel`` declares
+# ``created`` and ``modified`` in both django-extensions and django-model-utils.
+# A workspace class of the same name wins.
 DJANGO_ABSTRACT_BASES: dict[str, tuple[ParsedField, ...]] = {
+    "TimeStampedModel": (
+        _django_field("created", "DateTimeField", "auto_now_add=True", "TimeStampedModel"),
+        _django_field("modified", "DateTimeField", "auto_now=True", "TimeStampedModel"),
+    ),
     "AbstractBaseUser": _ABSTRACT_BASE_USER,
     "PermissionsMixin": _PERMISSIONS_MIXIN,
     "AbstractUser": (
@@ -1470,6 +1591,7 @@ def _abstract_bases_fields(
     model_path = Path(model.file_path)
     for base in model.base_classes:
         is_mptt_base = False
+        third_party: tuple[ParsedField, ...] | None = None
         known, parent = (
             resolver.lookup(model_path, base)
             if resolver is not None
@@ -1482,11 +1604,10 @@ def _abstract_bases_fields(
             # fall back to the name-only pick only for third-party bases.
             if known:
                 continue
-            is_mptt_base = (
-                resolver is not None
-                and resolver.model_root(model_path, base) == ("mptt.models", "MPTTModel")
-            )
-            if not is_mptt_base:
+            root = resolver.model_root(model_path, base) if resolver is not None else None
+            is_mptt_base = root == ("mptt.models", "MPTTModel")
+            third_party = _THIRD_PARTY_BASE_FIELDS.get(root) if root else None
+            if not is_mptt_base and third_party is None:
                 parent = _pick_base(by_name.get(target, []), model)
         elif parent is model or (
             parent.name == model.name and parent.file_path == model.file_path
@@ -1495,6 +1616,8 @@ def _abstract_bases_fields(
         if parent is None:
             if is_mptt_base:
                 contributed = _django_mptt_fields(mptt_names)
+            elif third_party is not None:
+                contributed = [replace(f) for f in third_party]
             else:
                 contributed = [replace(f) for f in DJANGO_ABSTRACT_BASES.get(target, ())]
         elif parent is model or not _is_abstract(parent):
@@ -1662,6 +1785,17 @@ _FROM_IMPORT_RE = re.compile(
     re.M,
 )
 _IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+([^\n]+)", re.M)
+_STAR_IMPORT_RE = re.compile(
+    r"^[ \t]*from[ \t]+(\.+[\w.]*|[\w.]+)[ \t]+import[ \t]+\*", re.M
+)
+#: ``Benefit = get_model("offer", "Benefit")`` at module level, through
+#: ``get_model`` or any ``<name>.get_model`` (``apps``, oscar's ``loading``).
+#: Only string-constant arguments name a model the scan can find.
+_GET_MODEL_RE = re.compile(
+    r"^(\w+)[ \t]*=[ \t]*(?:[\w.]+\.)?get_model\(\s*"
+    r"""(["'])(\w+)\2\s*,\s*(["'])(\w+)\4\s*,?\s*\)""",
+    re.M,
+)
 
 #: How many re-exports a base may sit behind (``core/db/__init__.py`` doing
 #: ``from .bases import SoftDeletable`` is one). Bounds a malformed import
@@ -1737,6 +1871,8 @@ class _ModuleEntry:
     defs: dict[str, ParsedModel]
     imports: dict[str, tuple[str, str | None]]
     non_models: frozenset[str]
+    model_refs: dict[str, tuple[str, str]] = dataclass_field(default_factory=dict)
+    """Names bound by ``get_model``, to ``(app_label, lowercased model name)``."""
 
 
 class _WorkspaceResolver:
@@ -1764,6 +1900,22 @@ class _WorkspaceResolver:
             tuple[Path, str], tuple[bool, ParsedModel | None]
         ] = {}
         self._model_roots: dict[tuple[Path, str], tuple[str, str] | None] = {}
+        self.models_by_label: dict[tuple[str, str], ParsedModel] = {}
+
+    def index_models(self, models: Sequence[ParsedModel]) -> None:
+        """Index concrete classes by ``(app_label, lowercased name)``.
+
+        This is what a ``get_model("offer", "Benefit")`` binding resolves
+        against. Indexing more models drops the cached lookups, which may
+        have resolved against the smaller index.
+        """
+        labels = _configured_app_labels(models)
+        for model in models:
+            if not _is_abstract(model):
+                key = (_effective_app_label(model, labels), model.name.lower())
+                self.models_by_label.setdefault(key, model)
+        self._lookups.clear()
+        self._model_roots.clear()
 
     def _resolved(self, path: Path) -> Path:
         """``path.resolve()`` once per path for the lifetime of the scan."""
@@ -1803,7 +1955,13 @@ class _WorkspaceResolver:
                     defs.setdefault(d.name, d)
         except Exception:
             return None
-        entry = _ModuleEntry(defs, _parse_imports(content), frozenset(non_models))
+        model_refs = {
+            m.group(1): (m.group(3), m.group(5).lower())
+            for m in _GET_MODEL_RE.finditer(content)
+        }
+        entry = _ModuleEntry(
+            defs, _parse_imports(content), frozenset(non_models), model_refs
+        )
         self.loaded[path] = entry
         return entry
 
@@ -1826,6 +1984,9 @@ class _WorkspaceResolver:
                 return True, defs[name]
             if name in non_models:
                 return True, None
+            if name in entry.model_refs:
+                model = self.models_by_label.get(entry.model_refs[name])
+                return model is not None, model
             target = imports.get(name)
             if target is None or target[1] is None:
                 return False, None
@@ -1920,6 +2081,8 @@ class _WorkspaceResolver:
             or module in ("model_utils.models", "polymorphic.models", "mptt.models")
         ):
             return module, target_name
+        if target_name in _THIRD_PARTY_MODEL_ROOTS.get(module, ()):
+            return module, target_name
 
         for candidate in _module_files(module, str(path), self.root):
             root = self._model_root(candidate, target_name, hops + 1)
@@ -1985,6 +2148,45 @@ def _pull_imported_bases(
     return pulled
 
 
+def _star_imports(file_path: str, content: str) -> list[tuple[str, str]]:
+    """``(file, module)`` for each ``from <module> import *`` outside a string."""
+    in_string = _lines_inside_strings(content.splitlines())
+    return [
+        (file_path, m.group(1))
+        for m in _STAR_IMPORT_RE.finditer(content)
+        if content.count("\n", 0, m.start()) not in in_string
+    ]
+
+
+def _pull_star_imported_defs(
+    star_imports: Iterable[tuple[str, str]],
+    known: Iterable[ParsedModel],
+    resolver: _WorkspaceResolver,
+) -> list[ParsedModel]:
+    """Classes of the modules a models file star-imports.
+
+    Loading ``offer/models.py`` runs ``from offer.benefits import *``, so
+    Django also registers every model ``benefits.py`` defines, whatever its
+    ``__all__`` says; django-oscar keeps its benefit and condition proxies
+    there (#341). ``star_imports`` holds ``(models file, module)`` pairs; the
+    first workspace file the module resolves to is read, as in a lookup.
+    """
+    known_defs = {(resolver._resolved(Path(m.file_path)), m.name) for m in known}
+    pulled: list[ParsedModel] = []
+    for from_file, module in star_imports:
+        for candidate in _module_files(module, from_file, resolver.root):
+            entry = resolver.load(candidate)
+            if entry is None:
+                continue
+            for found in entry.defs.values():
+                key = (resolver._resolved(Path(found.file_path)), found.name)
+                if key not in known_defs:
+                    known_defs.add(key)
+                    pulled.append(found)
+            break
+    return pulled
+
+
 #: Files that declare models but are not named ``models.py``. Pluggable
 #: Django frameworks keep their abstract bases here and leave ``models.py``
 #: holding only the concrete subclasses — django-oscar does this in all 14 of
@@ -2039,6 +2241,92 @@ def iter_workspace_py_files(
                 yield Path(dirpath) / name
 
 
+def _attach_implicit_parent_links(
+    models: list[ParsedModel], resolver: _WorkspaceResolver
+) -> None:
+    """Find the columns Django adds for direct, resolved concrete parents."""
+    configured_labels = _configured_app_labels(models)
+
+    def model_key(model: ParsedModel) -> tuple[Path, str]:
+        return resolver._resolved(Path(model.file_path)), model.name
+
+    concrete: dict[tuple[Path, str], ParsedModel] = {}
+    proxies: dict[tuple[Path, str], ParsedModel] = {}
+    for model in models:
+        if model.meta.get("proxy", "").strip() in ("True", "1", "true"):
+            proxies[model_key(model)] = model
+        else:
+            concrete[model_key(model)] = model
+
+    def concrete_key(parent: ParsedModel) -> tuple[Path, str] | None:
+        pending = [model_key(parent)]
+        visited: set[tuple[Path, str]] = set()
+        resolved: set[tuple[Path, str]] = set()
+        while pending:
+            key = pending.pop()
+            if key in visited:
+                continue
+            visited.add(key)
+            if key in concrete:
+                resolved.add(key)
+            elif key in proxies:
+                proxy = proxies[key]
+                for base in proxy.base_classes:
+                    ancestor = resolver.resolve(Path(proxy.file_path), base)
+                    if ancestor is not None:
+                        pending.append(model_key(ancestor))
+        return next(iter(resolved)) if len(resolved) == 1 else None
+
+    for model in concrete.values():
+        path = Path(model.file_path)
+        parents = {}
+        for base in model.base_classes:
+            parent = resolver.resolve(path, base)
+            if parent is None:
+                continue
+            key = concrete_key(parent)
+            if key is not None and concrete[key] is not model:
+                parents[key] = concrete[key]
+        if not parents:
+            continue
+
+        for model_field in model.all_fields():
+            if model_field.relation_kind != "OneToOneField":
+                continue
+            try:
+                call = ast.parse(f"_({model_field.args})", mode="eval").body
+            except SyntaxError:
+                continue
+            if not isinstance(call, ast.Call):
+                continue
+            kwargs = {kw.arg: kw.value for kw in call.keywords}
+            flag = kwargs.get("parent_link")
+            if not isinstance(flag, ast.Constant) or flag.value is not True:
+                continue
+            target = kwargs.get("to", call.args[0] if call.args else None)
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                app, _, name = target.value.rpartition(".")
+                parents = {
+                    key: parent
+                    for key, parent in parents.items()
+                    if (
+                        _effective_app_label(parent, configured_labels).lower(),
+                        parent.name.lower(),
+                    ) != (
+                        (app or _effective_app_label(model, configured_labels)).lower(),
+                        name.lower(),
+                    )
+                }
+            elif target is not None:
+                target_name = _dotted_name(target)
+                declaration_path = Path(model_field.declaration_file or model.file_path)
+                related = resolver.resolve(declaration_path, target_name) if target_name else None
+                if related is not None:
+                    parents.pop(model_key(related), None)
+
+        model.implicit_parent_links = {f"{parent.name.lower()}_ptr" for parent in parents.values()}
+
+
 def scan_workspace(
     root: str,
     exclude_globs: Sequence[str] = DEFAULT_EXCLUDES,
@@ -2061,6 +2349,7 @@ def scan_workspace(
     """
     root_path = Path(root).resolve()
     all_defs: list[ParsedModel] = []
+    star_imports: list[tuple[str, str]] = []
     scanned_files = 0
     for py in _iter_python_files(root_path, exclude_globs):
         scanned_files += 1
@@ -2078,12 +2367,18 @@ def scan_workspace(
                 file=sys.stderr,
             )
             continue
+        star_imports.extend(_star_imports(str(py), content))
     resolver = _WorkspaceResolver(root_path, exclude_globs)
+    all_defs.extend(_pull_star_imported_defs(star_imports, all_defs, resolver))
+    resolver.index_models(all_defs)
     all_defs.extend(
         _pull_imported_bases(all_defs, root_path, exclude_globs, resolver)
     )
+    # A base found through an ordinary import can be a get_model target.
+    resolver.index_models(all_defs)
 
     found = _resolve_and_filter(all_defs, resolver)
+    _attach_implicit_parent_links(found, resolver)
     # Finding SQLAlchemy models means reading every file, which a big Django
     # project should not pay for: look only when there are no Django models
     # or the project declares SQLAlchemy.

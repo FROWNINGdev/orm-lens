@@ -32,6 +32,8 @@ class ParsedField:
     """Abstract base this field was declared on, when it reached the model
     through inheritance rather than its own class body. ``None`` for a field
     the class declares itself."""
+    declaration_file: str | None = field(default=None, repr=False, compare=False)
+    """Source module for resolving class references in inherited fields."""
 
     def to_dict(self) -> dict:
         out = {
@@ -126,9 +128,10 @@ class ParsedModel:
     deliberately excluded: there the parent keeps its own table and the child
     only gains a ``parent_ptr``.
 
-    Kept separate from :attr:`fields` (and out of :meth:`to_dict`) so the tree,
-    ER diagrams and the extension keep showing what each class literally
-    declares.
+    Kept separate from :attr:`fields` (and, for Django, out of
+    :meth:`to_dict`) so JSON consumers and the extension still see what each
+    class literally declares. The CLI table, markdown and ER diagrams draw
+    :meth:`all_fields`, because they describe the table.
     """
     orm: str = "django"
     """``"django"`` or ``"sqlalchemy"``."""
@@ -141,6 +144,8 @@ class ParsedModel:
     removed_fields: list[str] = field(default_factory=list)
     """Names the class body sets to ``None``, which removes a field inherited
     from an abstract base (``username = None`` on an ``AbstractUser``)."""
+    implicit_parent_links: set[str] = field(default_factory=set)
+    """Auto-created Django parent-link columns that can suppress drift advisories."""
     mptt_field_names: dict[str, str | None] = field(default_factory=dict, repr=False, compare=False)
     """Internal MPTTMeta names, with None for a dynamically set name."""
 
@@ -320,6 +325,25 @@ def resolve_related_target(
     if "." not in related_model:
         return None, tail
     return related_model.rsplit(".", 1)[0], tail
+
+
+def related_model_app(
+    related_model: str, tail: str, source_app: str, apps: list[str]
+) -> str:
+    """App of the model a relation points at, among ``apps``, the apps that
+    define a model named ``tail``, in scan order.
+
+    An app-qualified reference (``"order.Line"``) keeps its app. A bare name
+    is the model in the field's own app when that app has one, as Django
+    resolves it. Otherwise the first app wins.
+    """
+    if "." in related_model:
+        label = related_model.rsplit(".", 1)[0]
+        if label in apps:
+            return label
+    if source_app in apps:
+        return source_app
+    return apps[0]
 
 
 def workspace_app_names(index: WorkspaceIndex) -> set[str]:

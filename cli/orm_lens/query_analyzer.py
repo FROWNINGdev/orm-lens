@@ -860,6 +860,8 @@ def _manager_chain_uses_prefetch_cache(operations: tuple[str, ...]) -> bool:
 # reverse FK / M2M reverse manager (``post.comment_set.all()`` etc.) so
 # even without a schema we can confidently flag it.
 _REVERSE_MANAGER_SUFFIX = re.compile(r"_set$")
+# ``null=True`` among a field's arguments.
+_NULL_TRUE = re.compile(r"\bnull\s*=\s*True\b")
 
 
 @dataclass
@@ -1281,6 +1283,9 @@ class _RelationSchema(dict[str, dict[str, str]]):
         super().__init__()
         self.targets: dict[tuple[str, str], str] = {}
         self.inverse_fields: dict[tuple[str, str], str] = {}
+        # ``(model, field)`` of every ForeignKey and OneToOneField declared
+        # with ``null=True``: a no-argument ``select_related()`` skips them.
+        self.nullable: set[tuple[str, str]] = set()
 
 
 def _loaded_prefix(parts: list[str], eager_paths: set[str]) -> int:
@@ -1321,6 +1326,9 @@ class NPlusOneScanner(ast.NodeVisitor):
         )
         self._inverse_fields = (
             models_schema.inverse_fields if isinstance(models_schema, _RelationSchema) else {}
+        )
+        self._nullable = (
+            models_schema.nullable if isinstance(models_schema, _RelationSchema) else set()
         )
         self._loops: list[tuple[ast.For | ast.AsyncFor, str | None, set[str]]] = []
         self.findings: list[NPlusOneFinding] = []
@@ -1511,9 +1519,12 @@ class NPlusOneScanner(ast.NodeVisitor):
                 # Only the load of a single-valued relation before the write
                 # is an N+1 that select_related fixes; a write on a manager is
                 # not served by any eager loading.
-                if len(parts) == 1 and self._classify(model_root, attr, None) in (
-                    "fk", "o2o", "reverse_o2o"
-                ) and not ("*" in select_set or attr in select_set or attr in prefetch_set):
+                write_kind = self._classify(model_root, attr, None)
+                if len(parts) == 1 and write_kind in ("fk", "o2o", "reverse_o2o") and not (
+                    "*" in select_set and self._bare_select_loads(model_root, attr, write_kind)
+                    or attr in select_set
+                    or attr in prefetch_set
+                ):
                     uncovered_fk.append(attr)
                     confidence = "high"
                 continue
@@ -1530,7 +1541,9 @@ class NPlusOneScanner(ast.NodeVisitor):
                 # Wildcards retain their existing single-hop classification.
                 first_kind = hops[0][1]
                 if (
-                    first_kind in ("fk", "o2o", "reverse_o2o") and "*" in select_set
+                    first_kind in ("fk", "o2o", "reverse_o2o")
+                    and "*" in select_set
+                    and self._bare_select_loads(model_root, relation_parts[0], first_kind)
                     or first_kind in ("m2m", "reverse") and "*" in prefetch_set
                 ):
                     loaded = max(loaded, 1)
@@ -1551,7 +1564,11 @@ class NPlusOneScanner(ast.NodeVisitor):
             if kind in ("fk", "o2o", "reverse_o2o"):
                 # A single-valued relation is loaded by either clause:
                 # select_related joins it, prefetch_related batches it.
-                if "*" in select_set or attr in select_set or attr in prefetch_set:
+                if (
+                    "*" in select_set and self._bare_select_loads(model_root, attr, kind)
+                    or attr in select_set
+                    or attr in prefetch_set
+                ):
                     continue
                 uncovered_fk.append(attr)
                 if model_root is not None:
@@ -1695,6 +1712,18 @@ class NPlusOneScanner(ast.NodeVisitor):
         # No schema — hint drives the classification.
         return kind_hint
 
+    def _bare_select_loads(self, model_root: str | None, attr: str, kind: str | None) -> bool:
+        """Does a no-argument ``select_related()`` load ``attr``?
+
+        Django follows only the non-null ForeignKey and OneToOneField declared
+        on the model. A nullable one and the reverse side of a one-to-one load
+        with a query per row unless they are named. Without a schema for the
+        model, the wildcard still counts for every relation.
+        """
+        if not model_root or model_root not in self.models_schema:
+            return True
+        return kind in ("fk", "o2o") and (model_root, attr) not in self._nullable
+
 
 def _dedup_preserve(seq: Sequence[str]) -> list[str]:
     seen: set[str] = set()
@@ -1773,6 +1802,27 @@ def _walk_for_accesses(
                     for argument in (*call.args, *call.keywords):
                         _walk_for_accesses(argument, loop_var, hits)
                 return
+        if (
+            method_name == "get"
+            and isinstance(node.func, ast.Attribute)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            # dict.get("key"): QuerySet.get() takes lookups as keywords or Q
+            # objects, never a string positionally, so `task.task.get("func")`
+            # reads a JSON or dict attribute, not a relation. What is read is
+            # the receiver up to that attribute: nothing more for `task.task`,
+            # the `product.category` relation for
+            # `item.product.category.metadata.get(...)`. Walking the whole
+            # receiver would record the dict attribute itself as an access.
+            # The arguments can still read a relation.
+            receiver = node.func.value
+            if isinstance(receiver, ast.Attribute):
+                _walk_for_accesses(receiver.value, loop_var, hits)
+            for argument in (*node.args, *node.keywords):
+                _walk_for_accesses(argument, loop_var, hits)
+            return
         if method_name in _MANAGER_METHODS and isinstance(node.func, ast.Attribute):
             calls = _collect_call_chain_methods(node)
             first_func = calls[0][1].func
@@ -1840,6 +1890,9 @@ def _build_schema_from_index(index: WorkspaceIndex) -> dict[str, dict[str, str]]
                     attrs[f.name] = "m2m"
                 else:  # pragma: no cover
                     attrs[f.name] = "fk"
+                args = getattr(f, "args", "") or ""
+                if kind in ("ForeignKey", "OneToOneField") and _NULL_TRUE.search(args):
+                    schema.nullable.add((model.name, f.name))
     user_model = find_user_model(index)
     user_model_name = user_model.name if user_model else None
     for app in index.apps:
@@ -1972,6 +2025,8 @@ def _build_schema_from_index_dict(payload: dict[str, Any]) -> dict[str, dict[str
                     attrs[fname] = "m2m"
                 else:
                     attrs[fname] = "fk"
+                if kind in ("ForeignKey", "OneToOneField") and _NULL_TRUE.search(f.get("args") or ""):
+                    schema.nullable.add((model.get("name", ""), fname))
     user_model_dict = find_user_model_from_dict(payload)
     user_model_name = user_model_dict.get("name") if user_model_dict else None
     for model in all_models:

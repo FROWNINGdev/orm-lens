@@ -7,12 +7,347 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [py-1.18.5] - 2026-11-27
+
+> Findings in GitLab merge requests; treebeard columns in drift.
+
+### Added
+
+- **`--format gitlab`: GitLab Code Quality reports.** `migration-risk`,
+  `nplusone` and `blast-radius` can write the JSON array GitLab reads from
+  `artifacts:reports:codequality`, so findings show up in the merge request
+  widget. Paths are relative to the repository root, including with
+  `--path subdir`. The fingerprint is built from the rule, the file and the
+  operation, not the line, so a finding that only moved is not shown as
+  new. Ready-made jobs live in `templates/migration-risk.yml` and
+  `templates/nplusone.yml`; they take `spec:inputs` (stage, Python version,
+  orm-lens version, path, severity or confidence, extra arguments) and work
+  through `include:remote` or as a CI/CD component ([#381](https://github.com/FROWNINGdev/orm-lens/pull/381)).
+
+- **Simplified Chinese translations for the queryset rules.** The documentation
+  for `DOL001` through `DOL007` is now available in Simplified Chinese and
+  linked from the locale index, the Chinese README and the complete rule
+  reference. Refs #81 ([#361](https://github.com/FROWNINGdev/orm-lens/pull/361)).
+
 ### Fixed
 
-- **DOL006 no longer marks snapshot removal safe to apply**
-  ([#313](https://github.com/FROWNINGdev/orm-lens/issues/313)). The VS Code rule
-  skips dictionary views such as `cache.keys()` and offers a manual suggestion
-  for possible QuerySets.
+- **drift sees the columns of treebeard and tree-queries bases.** A model on
+  `treebeard`'s `MP_Node` or `NS_Node`, or on `tree_queries`' `TreeNode`,
+  got none of the columns those bases add (`path`, `depth`, `numchild`;
+  `lft`, `rgt`, `tree_id`, `depth`; `parent`), because the bases live in
+  site-packages. `drift` then reported them as "migrated but no longer
+  declared" on every such model, wagtail's `Page` and `Collection` included,
+  and the ER view left them out. Fixes #351 (#353).
+
+- **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
+  and `URLField`**.
+  `alter_field_char_length` only matched the exact name `CharField`, so
+  `AlterField(..., field=models.EmailField(max_length=100))` got no finding,
+  although these fields are varchar columns and existing rows longer than
+  the new length make the migration fail the same way. The rule now covers
+  Django's CharField subclasses and project fields named like them
+  (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
+  not reach the column ([#367](https://github.com/FROWNINGdev/orm-lens/pull/367)).
+
+- **A one-line `class Meta: abstract = True` is read**.
+  Only the lines below `class Meta:` were parsed, so options written on the
+  header line itself were lost. Such an abstract base was listed as a
+  concrete model, its fields were missing from every subclass, and `drift`
+  failed with "declared, but no migration creates it" for the base and
+  "migrated but no longer declared" for the inherited columns. Options after
+  the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
+  are now read like the indented ones ([#366](https://github.com/FROWNINGdev/orm-lens/pull/366)).
+
+- **`er --format d2` quotes names D2 reserves.** A column named `width`,
+  `height`, `label`, `link`, `icon` or another D2 keyword was read as an
+  attribute of the table, not as a row: wagtail's image `width` and `height`
+  made `d2` reject the file, and a `label` column renamed the table. A model
+  named `Label` or `Link` broke the same way. Such names are now quoted, as
+  the D2 docs ask ([#365](https://github.com/FROWNINGdev/orm-lens/pull/365)).
+
+- **`er` (Mermaid) draws SQLAlchemy foreign key columns.** The default
+  Mermaid diagram left every SQLAlchemy foreign key column out of its table,
+  so `Address` lost `user_id` and an association table keyed by two foreign
+  keys (`order_id, tenant_id`) showed only `tenant_id`. They are now drawn
+  with their column type, as DBML, D2, PlantUML and DOT have since #356
+  ([#364](https://github.com/FROWNINGdev/orm-lens/pull/364)).
+
+- **A bare `.select_related()` no longer hides a nullable relation from DOL007
+  and `nplusone`.** Django's no-argument `select_related()` follows only the
+  non-null foreign keys and one-to-one fields declared on the model; a
+  nullable one and the reverse side of a one-to-one still cost a query per
+  row. Both analyzers read every relation as covered by it. When the schema
+  knows the model they now report those accesses; without a schema, a bare
+  `.select_related()` still covers every relation. Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#363](https://github.com/FROWNINGdev/orm-lens/pull/363)).
+
+- **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
+  flat `values_list()`.** In
+  `Order.objects.filter(user=user).order_by("-id").count() == 0` the rules
+  matched from `order_by`, so the DOL002 and DOL003 QuickFixes, which may
+  auto-apply, wrote
+  `Order.objects.filter(user=user).not order_by("-id").exists()`, a
+  SyntaxError, and the operator checks looked at the `.` before `order_by`.
+  `.first()` on a flat `values_list()` returns the first value, which is also
+  `None` when that row holds NULL, so DOL003 and DOL004 no longer flag it.
+  Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#362](https://github.com/FROWNINGdev/orm-lens/pull/362)).
+
+## [0.22.5] - 2026-11-27
+
+> Quick fixes for count() comparisons keep the whole queryset chain.
+
+### Fixed
+
+- **DOL001-DOL004 rewrite the whole queryset chain, and DOL003/DOL004 skip a
+  flat `values_list()`.** In
+  `Order.objects.filter(user=user).order_by("-id").count() == 0` the rules
+  matched from `order_by`, so the DOL002 and DOL003 QuickFixes, which may
+  auto-apply, wrote
+  `Order.objects.filter(user=user).not order_by("-id").exists()`, a
+  SyntaxError, and the operator checks looked at the `.` before `order_by`.
+  `.first()` on a flat `values_list()` returns the first value, which is also
+  `None` when that row holds NULL, so DOL003 and DOL004 no longer flag it.
+  Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#362](https://github.com/FROWNINGdev/orm-lens/pull/362)).
+
+
+- **A bare `.select_related()` no longer hides a nullable relation from DOL007
+  and `nplusone`.** Django's no-argument `select_related()` follows only the
+  non-null foreign keys and one-to-one fields declared on the model; a
+  nullable one and the reverse side of a one-to-one still cost a query per
+  row. Both analyzers read every relation as covered by it. When the schema
+  knows the model they now report those accesses; without a schema, a bare
+  `.select_related()` still covers every relation. Found in the review of
+  [#361](https://github.com/FROWNINGdev/orm-lens/pull/361) ([#363](https://github.com/FROWNINGdev/orm-lens/pull/363)).
+
+### Changed
+
+- **ER view runs on @xyflow/react 13** ([#350](https://github.com/FROWNINGdev/orm-lens/pull/350)). No visible change;
+  the graph library moved to its current major version.
+
+## [py-1.18.4] - 2026-11-24
+
+> Pre-commit checks only new migrations; ER shows abstract-base fields.
+
+### Added
+
+- **migration-risk: report only the migrations you pass**
+  ([#355](https://github.com/FROWNINGdev/orm-lens/pull/355)),
+  with `--only PATH` or positional files.
+  The whole history is still analyzed, but the report and the exit code
+  cover only those files. The `orm-lens-migration-risk` pre-commit hook now
+  passes the staged migrations, so a project whose old migrations already
+  ran can adopt it: on django-oscar the hook failed on every commit with 29
+  critical findings from 2014, and now reports only what you stage.
+  `only-changed: true` in the GitHub Action works for `migration-risk` too.
+
+### Fixed
+
+- **`--format github` and `--format sarif` name files from the checkout root
+  when `--path` is a subdirectory**
+  ([#358](https://github.com/FROWNINGdev/orm-lens/pull/358)).
+  With the Action's `path: backend`,
+  `nplusone` wrote `file=shop/views.py` for `backend/shop/views.py`, and an
+  absolute `--path` did the same for `migration-risk` and `blast-radius`, so
+  GitHub could not place the annotations on the PR diff. Files under the
+  working directory are now written relative to it.
+- **`er --format dbml|d2|plantuml|dot` point a relation at the right one of
+  two same-named models**
+  ([#357](https://github.com/FROWNINGdev/orm-lens/pull/357)).
+  When two apps define a model with the same name
+  (`basket.Line` and `order.Line`), these four formats drew every relation
+  to that name, `ForeignKey('order.Line')` and `'self'` included, to the app
+  scanned first. They now pick the model the way Mermaid has since #223: the
+  app named in the reference, else the field's own app, else the first app.
+- **`er --format d2|plantuml|dot` draw SQLAlchemy keys like DBML does**
+  ([#356](https://github.com/FROWNINGdev/orm-lens/pull/356)).
+  For a SQLAlchemy table these three formats marked only the first column of
+  a composite primary key, and drew each foreign key column as a
+  `ForeignKey` row with no type. A table whose primary key is also a foreign
+  key (an `OrderLine` keyed by `order_id, tenant_id`) had no primary key at
+  all in D2 and DOT, and PlantUML listed `order_id` twice. They now draw
+  every primary key column and keep the column type of a foreign key, as
+  DBML has since #210.
+- **ER diagrams, `scan` and hover cards show fields from abstract bases**
+  ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
+  They used to draw only what a class body declares, so on django-oscar 87
+  of 98 models showed 0 fields, and the ER diagram had 4 relations instead
+  of 117. Wagtail went from 52 to 138. Every output that describes the table
+  (`scan -f table|markdown`, `er` in all five formats, the extension's ER
+  view and hover) now includes the columns and relations an abstract base
+  contributes. The JSON `fields` list and the sidebar tree still list only
+  declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
+  which turns the reverse accessor off, and the `scan -f table` file column
+  is relative to the working directory instead of an absolute path.
+- **migration-risk reads positional operation arguments**
+  ([#359](https://github.com/FROWNINGdev/orm-lens/pull/359)).
+  A hand-written `migrations.AddField("item", "code", field)` lost
+  `add_field_not_null_no_default`, and `DeleteModel("Item")` lost
+  `delete_model_still_referenced`, both critical, because only keywords were
+  read. `AlterField`, `AddIndex`, `AddConstraint` and the other operations
+  had the same gap. Arguments now resolve by Django's declared order, the
+  same table `drift` has used since #303; an explicit keyword still wins.
+
+## [0.22.4] - 2026-11-24
+
+> ER view and hover cards show fields from abstract base models.
+
+### Fixed
+
+- **ER diagrams, `scan` and hover cards show fields from abstract bases**
+  ([#354](https://github.com/FROWNINGdev/orm-lens/pull/354)).
+  They used to draw only what a class body declares, so on django-oscar 87
+  of 98 models showed 0 fields, and the ER diagram had 4 relations instead
+  of 117. Wagtail went from 52 to 138. Every output that describes the table
+  (`scan -f table|markdown`, `er` in all five formats, the extension's ER
+  view and hover) now includes the columns and relations an abstract base
+  contributes. The JSON `fields` list and the sidebar tree still list only
+  declared fields. Mermaid labels also drop `as _` for `related_name="+"`,
+  which turns the reverse accessor off, and the `scan -f table` file column
+  is relative to the working directory instead of an absolute path.
+
+## [py-1.18.3] - 2026-11-23
+
+> Fewer false drift and migration-risk findings on real projects.
+
+### Fixed
+
+- **parser: recognize models built on django-solo, django-treebeard and django-tree-queries**
+  ([#330](https://github.com/FROWNINGdev/orm-lens/issues/330)).
+  `SingletonModel`, `MP_Node`, `NS_Node`, `AL_Node` and `TreeNode` live in
+  site-packages, so a class with only one of them as its base was not counted
+  as a model. wagtail's `Collection` and django-cms's `Page` and `PageType`
+  went missing from the scan. These bases now count when they are imported
+  from their packages; a local class with the same name does not.
+
+- **drift: no false `id` after a `RenameField` of the primary key**
+  ([#328](https://github.com/FROWNINGdev/orm-lens/issues/328)).
+  When a migration renames the primary key, the replayed state kept the
+  implicit `id` as well, and `drift` reported it as migrated but no longer
+  declared. On saleor this removes three false `id` lines.
+
+- **nplusone: `dict.get("key")` on a loop variable is not a manager call**
+  ([#329](https://github.com/FROWNINGdev/orm-lens/issues/329)).
+  `task.task.get("func")` on a dict field was read as a related-manager
+  access and got a `.prefetch_related("task")` that fails at runtime.
+  `QuerySet.get()` never takes a string as its first positional argument,
+  so such a call is now read as `dict.get`.
+
+- **migration-deps: use the app label set by `AppConfig.label`**
+  ([#327](https://github.com/FROWNINGdev/orm-lens/issues/327)).
+  With `label = "forum_threads"` in `apps.py`, `migration-deps threads`
+  reported every migration as both a root and a leaf, and asking by the real
+  label found no migrations folder. The label is now resolved the same way
+  `migration-risk` does it; on Misago, threads has one root and one leaf.
+
+- **migration-risk: `NullBooleanField` is nullable without `null=True`**
+  ([#338](https://github.com/FROWNINGdev/orm-lens/issues/338)).
+  `NullBooleanField.__init__` sets `null=True` itself, so migrations never
+  write the keyword, and `AddField(field=models.NullBooleanField())` was
+  reported as a critical NOT NULL column. Nullability is now decided by one
+  helper that knows this field, also for the unique-column rule, where a
+  `NullBooleanField(unique=True)` fills existing rows with NULL and is safe.
+
+- **migration-risk: `auto_now` on a date field subclass has a default**
+  ([#339](https://github.com/FROWNINGdev/orm-lens/issues/339)).
+  `AddField` with django-extensions' `ModificationDateTimeField(auto_now=True)`
+  or `CreationDateTimeField(auto_now_add=True)` was reported as a critical
+  NOT NULL column without a default. Django fills existing rows with the
+  current time for these, as it does for `DateTimeField`. Any field whose name
+  ends in `DateField`, `DateTimeField` or `TimeField` now counts.
+
+- **migration-risk: a migration that does not parse no longer causes a leaf conflict**
+  ([#337](https://github.com/FROWNINGdev/orm-lens/issues/337)).
+  A file `ast.parse` rejects (for example Python 3.14's unparenthesised
+  `except A, B:` read on an older interpreter) dropped out of the graph, so its
+  parent looked like a second leaf and `conflicting_migration_leaves` reported
+  a critical conflict. The app's graph is now treated as unknown, as for
+  computed `dependencies`, and the leaf check stays silent for that app.
+
+- **parser: resolve a base bound by `get_model("app", "Model")`**
+  ([#341](https://github.com/FROWNINGdev/orm-lens/issues/341)).
+  django-oscar binds `Benefit = get_model("offer", "Benefit")` in
+  `offer/benefits.py`, subclasses it there, and star-imports that module from
+  `offer/models.py`. The scan now reads modules a models file star-imports and
+  resolves a `get_model` binding with string arguments to the workspace model
+  with that app label (`AppConfig.label` when set) and name. On django-oscar,
+  the 12 benefit and condition proxies are found and their stale-table lines
+  leave `drift`.
+
+- **signals: "fires for all models" only on model signals**
+  ([#340](https://github.com/FROWNINGdev/orm-lens/issues/340)).
+  A receiver without `sender=` got the note `no sender = fires for all models`
+  whatever the signal was, including `user_logged_in`, `pre_migrate` and
+  project signals, which models never send. The note now appears only for
+  `pre_init`, `post_init`, `pre_save`, `post_save`, `pre_delete`,
+  `post_delete` and `m2m_changed`; the sender still shows as `<any>`.
+
+- **parser: `TimeStampedModel` subclasses keep `created` and `modified`**
+  ([#336](https://github.com/FROWNINGdev/orm-lens/issues/336)).
+  django-extensions and django-model-utils both define an abstract
+  `TimeStampedModel` with these two fields, but it lives in site-packages, so
+  every subclass lost them and `drift` reported both as "migrated but no
+  longer declared". They now come from the same table as the
+  `django.contrib.auth` bases; a workspace class of that name still wins.
+
+- **parser: keep a model whose base list holds a call**
+  ([#335](https://github.com/FROWNINGdev/orm-lens/issues/335)).
+  `class Comment(ExportModelOperationsMixin("comment"), models.Model)` was
+  dropped because the class-header regex only reads bases up to the first
+  `)`. Calls in the base list are now stripped before matching, so the other
+  bases still decide whether the class is a model; a call as the only base
+  is still not a model. Python and TypeScript parsers.
+
+## [0.22.3] - 2026-11-23
+
+> Parser keeps more models: call bases, TimeStampedModel fields.
+
+### Fixed
+
+- **parser: `TimeStampedModel` subclasses keep `created` and `modified`**
+  ([#336](https://github.com/FROWNINGdev/orm-lens/issues/336)).
+  django-extensions and django-model-utils both define an abstract
+  `TimeStampedModel` with these two fields, but it lives in site-packages, so
+  every subclass lost them and `drift` reported both as "migrated but no
+  longer declared". They now come from the same table as the
+  `django.contrib.auth` bases; a workspace class of that name still wins.
+
+- **parser: keep a model whose base list holds a call**
+  ([#335](https://github.com/FROWNINGdev/orm-lens/issues/335)).
+  `class Comment(ExportModelOperationsMixin("comment"), models.Model)` was
+  dropped because the class-header regex only reads bases up to the first
+  `)`. Calls in the base list are now stripped before matching, so the other
+  bases still decide whether the class is a model; a call as the only base
+  is still not a model. Python and TypeScript parsers.
+
+## [py-1.18.2] - 2026-11-22
+
+> Drift understands MPTT, parent links and hand-written migrations.
+
+### Fixed
+
+- **migration-risk: a second `initial = True` migration runs on a fresh database**
+  ([#305](https://github.com/FROWNINGdev/orm-lens/issues/305)).
+  When apps reference each other, `makemigrations` splits the initial
+  migration and marks `0002_...` as `initial = True` too. A NOT NULL foreign
+  key added there was reported as critical, although that migration only ever
+  runs before the app has rows. It is now exempt, unless an earlier migration
+  of the app or an earlier operation in the same file runs `RunPython` or a
+  row-changing `RunSQL`; then the finding is a warning.
+
+- **signals: read a positional sender in `Signal.connect()`**
+  ([#307](https://github.com/FROWNINGdev/orm-lens/issues/307)).
+  `post_save.connect(handler, Order)` was listed as firing for every model.
+  The second positional argument is now read as the sender, while unrelated
+  `.connect(host, port)` calls are still ignored.
+
+- **drift: read migration operation arguments passed positionally**
+  ([#303](https://github.com/FROWNINGdev/orm-lens/issues/303)).
+  Hand-written `DeleteModel("Network")` or `RemoveField("rack", "legacy_id")`
+  were dropped from the replay, so their models and fields showed up as false
+  drift. Arguments are now bound by Django's signature when the keyword is
+  missing, and `CreateModel` reads a positional `fields` list.
 
 - **parser: resolve an abstract model nested inside another class as a base**
   ([#309](https://github.com/FROWNINGdev/orm-lens/issues/309)).
@@ -44,24 +379,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subclass that changes only the database operation now counts as adding the
   field to Django's migration state.
 
-- **VS Code rules DOL001-DOL004 skip a match that is an operand of an operator**
-  ([#293](https://github.com/FROWNINGdev/orm-lens/issues/293)).
-  In `if event.capacity - event.registrations.count() > 0:` Python tests the
-  whole difference, so the safe fix `event.capacity - event.registrations.exists()`
-  made a full event look open, and DOL002's rewrite
-  `event.capacity - not event.registrations.exists()` was a SyntaxError. Matches after an arithmetic, bitwise or comparison operator are
-  now left alone; assignment and augmented assignment still get the finding.
-
 - **Schema checks count the tree fields generated by django-mptt**
   ([#302](https://github.com/FROWNINGdev/orm-lens/issues/302)). Migrations with
   `lft`, `rght`, `tree_id`, and `level` now match their MPTT models.
 
-- **VS Code rules DOL001-DOL004 skip a match that continues on its right**
-  ([#296](https://github.com/FROWNINGdev/orm-lens/issues/296)).
-  `if qs.count() > 0.5:` was rewritten to `qs.exists().5` (a SyntaxError), and
-  `> 0 + offset` or `== 0 == other` changed meaning. A match followed by a
-  fraction, an arithmetic or bitwise operator, another comparison, `is` or `in`
-  is now left alone.
+- **Drift detection recognizes Django's implicit parent links for concrete inheritance**
+  ([#301](https://github.com/FROWNINGdev/orm-lens/issues/301)). A migrated
+  `post_ptr` column no longer looks undeclared when Django adds it to a child,
+  while an inferred link cannot cause blocking drift.
 
 - **parser: collect fields declared inside class-body conditional blocks**
   ([#253](https://github.com/FROWNINGdev/orm-lens/issues/253)).
@@ -83,6 +408,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace app keeps matching by model name alone: an `AppConfig` can rename
   an app (`ForeignKey("wagtailimages.Image")` for an `images/` app), and a
   delete preview must not hide a row it cannot disprove.
+
+## [0.22.2] - 2026-11-22
+
+> Quick fixes for .count() > 0 no longer produce broken code.
+
+### Fixed
+
+- **DOL006 no longer marks snapshot removal safe to apply**
+  ([#313](https://github.com/FROWNINGdev/orm-lens/issues/313)). The VS Code rule
+  skips dictionary views such as `cache.keys()` and offers a manual suggestion
+  for possible QuerySets.
+
+- **VS Code rules DOL001-DOL004 skip a match that is an operand of an operator**
+  ([#293](https://github.com/FROWNINGdev/orm-lens/issues/293)).
+  In `if event.capacity - event.registrations.count() > 0:` Python tests the
+  whole difference, so the safe fix `event.capacity - event.registrations.exists()`
+  made a full event look open, and DOL002's rewrite
+  `event.capacity - not event.registrations.exists()` was a SyntaxError. Matches after an arithmetic, bitwise or comparison operator are
+  now left alone; assignment and augmented assignment still get the finding.
+
+- **VS Code rules DOL001-DOL004 skip a match that continues on its right**
+  ([#296](https://github.com/FROWNINGdev/orm-lens/issues/296)).
+  `if qs.count() > 0.5:` was rewritten to `qs.exists().5` (a SyntaxError), and
+  `> 0 + offset` or `== 0 == other` changed meaning. A match followed by a
+  fraction, an arithmetic or bitwise operator, another comparison, `is` or `in`
+  is now left alone.
 
 ## [py-1.18.1] - 2026-11-17
 

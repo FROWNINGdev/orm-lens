@@ -45,6 +45,7 @@ from .models import (
     ParsedModel,
     WorkspaceIndex,
     find_user_model,
+    related_model_app,
     resolve_related_tail,
 )
 
@@ -81,11 +82,9 @@ _PK_RE = re.compile(r"\bprimary_key\s*=\s*True\b")
 
 
 def _columns(model: ParsedModel) -> list[ParsedField]:
-    """Fields drawn for ``model``: what a Django class declares, the whole
-    table for a SQLAlchemy one."""
-    if model.orm == "sqlalchemy":
-        return model.all_fields()
-    return model.fields
+    """Fields drawn for ``model``: the whole table, including the columns
+    and relations an abstract base contributes."""
+    return model.all_fields()
 
 
 def _implicit_pk_type(model: ParsedModel) -> str:
@@ -109,18 +108,42 @@ def _pk_field(model: ParsedModel) -> ParsedField | None:
     return None
 
 
-def _qualified_names(index: WorkspaceIndex) -> dict[str, str]:
-    """Map bare model name → ``app.Model`` (first definition wins,
-    matching the Mermaid builder's lookup semantics)."""
-    out: dict[str, str] = {}
+def _is_column(model: ParsedModel, f: ParsedField) -> bool:
+    """True when ``f`` is drawn as a typed column of the table.
+
+    A SQLAlchemy foreign key is an ordinary column with its own type; only a
+    ``relationship()`` attribute has no column. A Django relation field is
+    drawn in the relation rows instead.
+    """
+    if model.orm == "sqlalchemy":
+        return f.type != "relationship"
+    return not f.is_relation
+
+
+def _primary_key_columns(model: ParsedModel) -> list[ParsedField]:
+    """Columns drawn as the primary key: every ``primary_key=True`` column of
+    a SQLAlchemy table (composite keys included), else Django's one PK field."""
+    if model.orm == "sqlalchemy":
+        return [
+            f
+            for f in _columns(model)
+            if _is_column(model, f) and _PK_RE.search(f.args or "")
+        ]
+    pk = _pk_field(model)
+    return [pk] if pk is not None else []
+
+
+def _apps_by_model_name(index: WorkspaceIndex) -> dict[str, list[str]]:
+    """Map bare model name → the apps that define it, in scan order."""
+    out: dict[str, list[str]] = {}
     for app in index.apps:
         for m in app.models:
-            out.setdefault(m.name, f"{app.name}.{m.name}")
+            out.setdefault(m.name, []).append(app.name)
     return out
 
 
 def _collect_edges(index: WorkspaceIndex) -> list[_Edge]:
-    qualified = _qualified_names(index)
+    apps_by_name = _apps_by_model_name(index)
     # Refs must point at a column that actually exists on the target table —
     # the explicit PK when one is declared, Django's implicit "id" otherwise.
     pk_by_qualified: dict[str, str] = {}
@@ -138,14 +161,16 @@ def _collect_edges(index: WorkspaceIndex) -> list[_Edge]:
             for f in _columns(model):
                 if not f.is_relation or not f.related_model:
                     continue
-                tail = (
-                    model.name
-                    if f.related_model == "self"
-                    else resolve_related_tail(f.related_model, user_name)
-                )
-                if tail is None or tail not in qualified:
-                    continue
-                target = qualified[tail]
+                if f.related_model == "self":
+                    target = f"{app.name}.{model.name}"
+                else:
+                    tail = resolve_related_tail(f.related_model, user_name)
+                    if tail is None or tail not in apps_by_name:
+                        continue
+                    target_app = related_model_app(
+                        f.related_model, tail, app.name, apps_by_name[tail]
+                    )
+                    target = f"{target_app}.{tail}"
                 edges.append(
                     _Edge(
                         src=f"{app.name}.{model.name}",
@@ -194,18 +219,14 @@ def build_dbml(index: WorkspaceIndex) -> str:
             lines.append(f"Table {app.name}.{model.name} {{")
             if pk is None:
                 lines.append(f"  id {_implicit_pk_type(model)} [pk]")
+            pk_columns = _primary_key_columns(model)
             for f in _columns(model):
-                scalar_column = model.orm == "sqlalchemy" and f.type != "relationship"
-                if f.is_relation and not scalar_column:
+                if not _is_column(model, f):
                     continue
-                is_pk = (
-                    bool(_PK_RE.search(f.args))
-                    if scalar_column else pk is not None and f.name == pk.name
-                )
-                marker = " [pk]" if is_pk else ""
+                marker = " [pk]" if f in pk_columns else ""
                 lines.append(f"  {f.name} {f.type}{marker}")
             for f in _columns(model):
-                if f.is_relation and (model.orm != "sqlalchemy" or f.type == "relationship"):
+                if not _is_column(model, f):
                     lines.append(f"  {f.name} {f.relation_kind or 'ForeignKey'}")
             src = _short_source(app.path, app.name, model).replace("'", "\\'")
             # ParsedModel.line_number is zero-based; DBML notes are shown to
@@ -237,6 +258,39 @@ def build_dbml(index: WorkspaceIndex) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Keys D2 reads as an attribute of the shape instead of a child: a column
+# named ``width`` would set the table's width, ``label`` its title. D2 says to
+# quote a reserved keyword to use it as a name
+# (https://d2lang.com/tour/sql-tables), and it matches them in any case.
+_D2_RESERVED = frozenset(
+    {
+        # attributes
+        "label", "desc", "shape", "icon", "constraint", "tooltip", "link",
+        "near", "width", "height", "direction", "top", "left", "grid-rows",
+        "grid-columns", "grid-gap", "vertical-gap", "horizontal-gap",
+        "class", "classes", "vars", "style", "source-arrowhead",
+        "target-arrowhead",
+        # style keywords, only valid under ``style``
+        "opacity", "stroke", "fill", "fill-pattern", "stroke-width",
+        "stroke-dash", "border-radius", "font", "font-size", "font-color",
+        "bold", "italic", "underline", "text-transform", "shadow", "multiple",
+        "double-border", "3d", "animated", "filled",
+        # boards
+        "layers", "scenarios", "steps",
+    }
+)
+
+
+def _d2_key(name: str) -> str:
+    """``name`` as a D2 key, quoted when D2 would read it as a keyword."""
+    return f'"{name}"' if name.lower() in _D2_RESERVED else name
+
+
+def _d2_path(*parts: str) -> str:
+    """Dotted D2 key (``app.Model.field``) with each part made safe."""
+    return ".".join(_d2_key(p) for p in parts)
+
+
 def build_d2(index: WorkspaceIndex) -> str:
     """D2 document with ``sql_table`` shapes — render via ``d2 in.d2 out.svg``.
 
@@ -253,25 +307,32 @@ def build_d2(index: WorkspaceIndex) -> str:
     for app in index.apps:
         for model in app.models:
             pk = _pk_field(model)
-            lines.append(f"{app.name}.{model.name}: {{")
+            lines.append(f"{_d2_path(app.name, model.name)}: {{")
             lines.append("  shape: sql_table")
             if pk is None:
                 lines.append(
                     f"  id: {_implicit_pk_type(model)} {{constraint: primary_key}}"
                 )
+            pk_columns = _primary_key_columns(model)
             for f in _columns(model):
-                if f.is_relation:
+                if not _is_column(model, f):
                     continue
-                constraint = (
-                    " {constraint: primary_key}"
-                    if pk is not None and f.name == pk.name
-                    else ""
-                )
-                lines.append(f"  {f.name}: {f.type}{constraint}")
-            for f in _columns(model):
+                constraints = []
+                if f in pk_columns:
+                    constraints.append("primary_key")
                 if f.is_relation:
+                    constraints.append("foreign_key")
+                if len(constraints) > 1:
+                    constraint = f" {{constraint: [{'; '.join(constraints)}]}}"
+                elif constraints:
+                    constraint = f" {{constraint: {constraints[0]}}}"
+                else:
+                    constraint = ""
+                lines.append(f"  {_d2_key(f.name)}: {f.type}{constraint}")
+            for f in _columns(model):
+                if not _is_column(model, f):
                     lines.append(
-                        f"  {f.name}: {f.relation_kind or 'ForeignKey'} "
+                        f"  {_d2_key(f.name)}: {f.relation_kind or 'ForeignKey'} "
                         "{constraint: foreign_key}"
                     )
             lines.append("}")
@@ -284,7 +345,9 @@ def build_d2(index: WorkspaceIndex) -> str:
         if e.through:
             label_parts.append(f"through {e.through}")
         label = " · ".join(label_parts)
-        lines.append(f'{e.src}.{e.field} -> {e.target}.{e.target_pk}: "{label}"')
+        src = _d2_path(*e.src.split("."), e.field)
+        target = _d2_path(*e.target.split("."), e.target_pk)
+        lines.append(f'{src} -> {target}: "{label}"')
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -311,21 +374,21 @@ def build_plantuml(index: WorkspaceIndex) -> str:
     for app in index.apps:
         for model in app.models:
             qualified = f"{app.name}.{model.name}"
-            pk = _pk_field(model)
+            pk_columns = _primary_key_columns(model)
             lines.append(f'entity "{qualified}" as {_puml_alias(qualified)} {{')
-            if pk is None:
+            if not pk_columns:
                 lines.append(f"  * id : {_implicit_pk_type(model)}")
-            else:
-                lines.append(f"  * {pk.name} : {pk.type}")
+            for pk in pk_columns:
+                fk = " <<FK>>" if pk.is_relation and _is_column(model, pk) else ""
+                lines.append(f"  * {pk.name} : {pk.type}{fk}")
             lines.append("  --")
             for f in _columns(model):
-                if f.is_relation:
+                if not _is_column(model, f) or f in pk_columns:
                     continue
-                if pk is not None and f.name == pk.name:
-                    continue
-                lines.append(f"  {f.name} : {f.type}")
+                fk = " <<FK>>" if f.is_relation else ""
+                lines.append(f"  {f.name} : {f.type}{fk}")
             for f in _columns(model):
-                if f.is_relation:
+                if not _is_column(model, f):
                     lines.append(f"  {f.name} : {f.relation_kind or 'ForeignKey'}")
             lines.append("}")
             lines.append("")
@@ -363,7 +426,7 @@ def _dot_quote(value: str) -> str:
 
 def _dot_table(model: ParsedModel) -> str:
     """Graphviz HTML label for one model and its fields."""
-    pk = _pk_field(model)
+    pk_columns = _primary_key_columns(model)
     rows = [
         '<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">',
         (
@@ -371,23 +434,25 @@ def _dot_table(model: ParsedModel) -> str:
             f"<B>{html.escape(model.name)}</B></TD></TR>"
         ),
     ]
-    if pk is None:
+    if not pk_columns:
         rows.append(
             f"<TR><TD ALIGN=\"LEFT\"><B>id</B></TD><TD>{_implicit_pk_type(model)} · PK</TD></TR>"
         )
     for field in _columns(model):
-        if field.is_relation:
+        if not _is_column(model, field):
             continue
         name = html.escape(field.name)
         field_type = html.escape(field.type)
-        if pk is not None and field.name == pk.name:
+        if field in pk_columns:
             name = f"<B>{name}</B>"
             field_type += " · PK"
+        if field.is_relation:
+            field_type += " · FK"
         rows.append(
             f'<TR><TD ALIGN="LEFT">{name}</TD><TD>{field_type}</TD></TR>'
         )
     for field in _columns(model):
-        if not field.is_relation:
+        if _is_column(model, field):
             continue
         rows.append(
             '<TR><TD ALIGN="LEFT">'

@@ -256,6 +256,27 @@ class SyntheticSchemaTest(unittest.TestCase):
         dot = build_dot(idx)
         self.assertIn("product → sku / ForeignKey / PROTECT", dot)
 
+    def test_d2_quotes_reserved_keywords(self) -> None:
+        """D2 reads ``width: IntegerField`` as the table's width, not as a
+        column; reserved names must be quoted to stay rows and edge ends."""
+        idx = self._index_for(
+            "from django.db import models\n"
+            "class Label(models.Model):\n"
+            "    label = models.CharField(max_length=64, primary_key=True)\n"
+            "class Image(models.Model):\n"
+            "    width = models.IntegerField()\n"
+            "    height = models.IntegerField()\n"
+            "    title = models.CharField(max_length=64)\n"
+            "    link = models.ForeignKey(Label, on_delete=models.CASCADE)\n"
+        )
+        d2 = build_d2(idx)
+        self.assertIn('blog."Label": {\n  shape: sql_table\n', d2)
+        self.assertIn('  "label": CharField {constraint: primary_key}', d2)
+        self.assertIn('  "width": IntegerField\n  "height": IntegerField\n', d2)
+        self.assertIn("  title: CharField\n", d2)
+        self.assertIn('  "link": ForeignKey {constraint: foreign_key}', d2)
+        self.assertIn('blog.Image."link" -> blog."Label"."label"', d2)
+
 
 class MermaidSameNameModelsTest(unittest.TestCase):
     """Two apps defining the same class name stay two Mermaid entities (#223)."""
@@ -351,6 +372,71 @@ class MermaidSameNameModelsTest(unittest.TestCase):
             if line.startswith("  ") and line.endswith(" {")
         ]
         self.assertEqual(entities, names)
+
+
+class SameNameModelEdgesAllFormatsTest(unittest.TestCase):
+    """DBML, D2, PlantUML and DOT point a relation at the right one of two
+    same-named models, as Mermaid does since #223."""
+
+    def setUp(self) -> None:
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        apps = {
+            "basket": (
+                "from django.db import models\n"
+                "class Line(models.Model):\n"
+                "    quantity = models.IntegerField()\n"
+                "class LineAttribute(models.Model):\n"
+                "    line = models.ForeignKey(Line, on_delete=models.CASCADE)\n"
+            ),
+            "order": (
+                "from django.db import models\n"
+                "class Line(models.Model):\n"
+                "    title = models.CharField(max_length=100)\n"
+                "    parent = models.ForeignKey('self', on_delete=models.CASCADE)\n"
+                "class Refund(models.Model):\n"
+                "    line = models.ForeignKey(Line, on_delete=models.CASCADE)\n"
+            ),
+            "checkout": (
+                "from django.db import models\n"
+                "class Receipt(models.Model):\n"
+                "    line = models.ForeignKey('order.Line', on_delete=models.PROTECT)\n"
+            ),
+        }
+        for label, models_py in apps.items():
+            app = Path(tmp.name) / label
+            app.mkdir()
+            (app / "__init__.py").write_text("", encoding="utf-8")
+            (app / "models.py").write_text(models_py, encoding="utf-8")
+        self.index = scan_workspace(tmp.name, DEFAULT_EXCLUDES)
+
+    def test_dbml(self) -> None:
+        dbml = build_dbml(self.index)
+        self.assertIn("Ref: basket.LineAttribute.line > basket.Line.id", dbml)
+        self.assertIn("Ref: order.Line.parent > order.Line.id", dbml)
+        self.assertIn("Ref: order.Refund.line > order.Line.id", dbml)
+        self.assertIn("Ref: checkout.Receipt.line > order.Line.id", dbml)
+
+    def test_d2(self) -> None:
+        d2 = build_d2(self.index)
+        self.assertIn("basket.LineAttribute.line -> basket.Line.id", d2)
+        self.assertIn("order.Line.parent -> order.Line.id", d2)
+        self.assertIn("order.Refund.line -> order.Line.id", d2)
+        self.assertIn("checkout.Receipt.line -> order.Line.id", d2)
+
+    def test_plantuml(self) -> None:
+        puml = build_plantuml(self.index)
+        self.assertIn("basket_LineAttribute }o--|| basket_Line : line", puml)
+        self.assertIn("order_Line }o--|| order_Line : parent", puml)
+        self.assertIn("order_Refund }o--|| order_Line : line", puml)
+        self.assertIn("checkout_Receipt }o--|| order_Line : line", puml)
+
+    def test_dot(self) -> None:
+        dot = build_dot(self.index)
+        self.assertIn('"basket.LineAttribute" -> "basket.Line"', dot)
+        self.assertIn('"order.Line" -> "order.Line"', dot)
+        self.assertIn('"order.Refund" -> "order.Line"', dot)
+        self.assertIn('"checkout.Receipt" -> "order.Line"', dot)
 
 
 class CliWiringTest(unittest.TestCase):
