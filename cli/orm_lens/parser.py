@@ -79,7 +79,7 @@ NON_MODEL_TAIL = re.compile(
     r"^(ModelAdmin|ModelForm|ModelSerializer|ModelChoiceField|"
     r"ModelMultipleChoiceField|Serializer|Form|Admin|View|ViewSet|"
     r"Manager|QuerySet|Config|AppConfig|Response|Handler|Middleware|"
-    r"Backend|Command)$"
+    r"Backend|Command|\w*TestCase)$"
 )
 
 # ``name = models.Manager()`` declares a manager, not a column. FIELD_RE
