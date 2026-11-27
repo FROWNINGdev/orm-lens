@@ -310,5 +310,64 @@ class SignalConnectTest(unittest.TestCase):
         self.assertEqual(edges, [])
 
 
+class SrcLayoutModuleNamesTest(unittest.TestCase):
+    def test_src_layout_strips_non_package_prefix(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "src" / "shop" / "__init__.py", "")
+            _write(
+                root / "src" / "shop" / "signals.py",
+                "from django.dispatch import Signal\n\n"
+                "order_paid = Signal()\n",
+            )
+            _write(
+                root / "src" / "shop" / "receivers.py",
+                "from django.dispatch import receiver\n"
+                "from shop.signals import order_paid\n\n"
+                "@receiver(order_paid)\n"
+                "def send_receipt(sender, **kwargs):\n"
+                "    pass\n",
+            )
+
+            result = signal_graph(str(root))
+
+            self.assertEqual(len(result["edges"]), 1)
+            edge = result["edges"][0]
+            self.assertEqual(edge["signal"], "order_paid")
+            self.assertEqual(edge["handler"], "shop.receivers.send_receipt")
+            self.assertTrue(edge["file"].startswith("src/shop/receivers.py:"))
+            custom = result["custom_signals"][0]
+            self.assertEqual(custom["fqn"], "shop.signals.order_paid")
+            self.assertTrue(custom["defined_in"].startswith("src/shop/signals.py:"))
+
+    def test_flat_layout_keeps_names(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "shop" / "__init__.py", "")
+            _write(
+                root / "shop" / "signals.py",
+                "from django.dispatch import Signal\n\n"
+                "order_paid = Signal()\n",
+            )
+            _write(
+                root / "shop" / "receivers.py",
+                "from django.dispatch import receiver\n"
+                "from shop.signals import order_paid\n\n"
+                "@receiver(order_paid)\n"
+                "def send_receipt(sender, **kwargs):\n"
+                "    pass\n",
+            )
+
+            result = signal_graph(str(root))
+
+            self.assertEqual(len(result["edges"]), 1)
+            edge = result["edges"][0]
+            self.assertEqual(edge["signal"], "order_paid")
+            self.assertEqual(edge["handler"], "shop.receivers.send_receipt")
+            custom = result["custom_signals"][0]
+            self.assertEqual(custom["fqn"], "shop.signals.order_paid")
+            self.assertEqual(custom["defined_in"], "shop/signals.py:3")
+
+
 if __name__ == "__main__":
     unittest.main()

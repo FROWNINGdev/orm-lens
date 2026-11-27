@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Signal names drop the non-package `src.` prefix in a src layout.** A
+  project that keeps its packages under `src/` (pretalx, for example) had
+  every handler and custom signal named `src.pretalx...`, which is not
+  importable and does not match the names in the code. The module path now
+  starts at the topmost directory that is a package, so
+  `src/shop/receivers.py` becomes `shop.receivers`. File locations are
+  unchanged. Fixes #378.
+
 - **drift sees the columns of treebeard and tree-queries bases.** A model on
   `treebeard`'s `MP_Node` or `NS_Node`, or on `tree_queries`' `TreeNode`,
   got none of the columns those bases add (`path`, `depth`, `numchild`;
