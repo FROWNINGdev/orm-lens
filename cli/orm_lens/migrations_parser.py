@@ -1368,7 +1368,17 @@ class MigrationRiskAnalyzer:
                 f"default; existing rows will raise IntegrityError."
             )
             nn_confidence, nn_severity = "high", "critical"
-            if self.data_op_before:
+            if any(kw.arg is None for kw in field_call.keywords):
+                # The field's options come from a ** argument. null= and
+                # default= are inside the dict, which the parser cannot read,
+                # so the worst case is not certain.
+                description = (
+                    f"May add a NOT NULL column '{name}' to '{model}' without a "
+                    f"default: the field's options come from a ** argument, so "
+                    f"null= and default= could not be read."
+                )
+                nn_confidence, nn_severity = "low", "warning"
+            elif self.data_op_before:
                 # A RunPython, or a RunSQL that deletes or updates rows, runs
                 # first. It may empty or backfill the table; say so instead of
                 # calling it certain.
