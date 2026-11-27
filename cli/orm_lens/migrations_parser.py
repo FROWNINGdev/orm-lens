@@ -2026,6 +2026,20 @@ def analyze_migration_risks(
         ordered = _replay_order(trees, app_label=app_label, infer_label=not has_configured_label)
         ordered_files = [path for path, _tree in ordered]
         parsed = [m for m in (_describe_migration(p, t) for p, t in ordered) if m]
+        effective_label = (
+            app_label
+            if has_configured_label
+            else _resolve_app_label({m["name"]: m["dependencies"] for m in parsed}, app_label)
+        )
+        deps_unknown = unreadable or any(m.get("dependencies_unknown") for m in parsed)
+        known_migrations = {m["name"] for m in parsed}
+        # A missing/opaque migration may have changed any earlier length.
+        # In that case only operations within the same file share knowledge.
+        complete_history = bool(effective_label) and not deps_unknown and all(
+            app != effective_label or name in known_migrations
+            for migration in parsed
+            for app, name in migration["dependencies"]
+        )
 
         app_findings: list[tuple[int, MigrationRisk]] = []
         # (migration index, line, model, field-or-None) for every operation in
@@ -2041,7 +2055,7 @@ def analyze_migration_risks(
                 migration_index=idx,
                 current_schema=current_schema,
                 earlier_data_ops=seen_data_op,
-                field_lengths=field_lengths,
+                field_lengths=field_lengths if complete_history else None,
             )
             app_findings.extend((idx, f) for f in analyzer.analyze())
             introduced.extend((idx, line, m, fl) for line, m, fl in analyzer.introduced)
@@ -2071,12 +2085,6 @@ def analyze_migration_risks(
             # its parent looks like a leaf. We cannot tell the graph's shape,
             # so stay silent for the app. A file that does not parse (e.g.
             # Python 3.14 syntax on an older interpreter) leaves the same hole.
-            effective_label = (
-                app_label
-                if has_configured_label
-                else _resolve_app_label({m["name"]: m["dependencies"] for m in parsed}, app_label)
-            )
-            deps_unknown = unreadable or any(m.get("dependencies_unknown") for m in parsed)
             leaves = (
                 _compute_roots_leaves_cross(
                     _collapse_squashed(parsed, effective_label), effective_label

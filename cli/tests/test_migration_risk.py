@@ -580,6 +580,28 @@ class AlterFieldTest(unittest.TestCase):
         self.assertEqual([f.migration for f in findings], ["0003_step"])
         self.assertIn("if this narrows", findings[0].description)
 
+    def test_missing_migration_keeps_previous_length_unknown(self) -> None:
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "orders"
+            _write(
+                app, "0001_initial",
+                "from django.db import migrations, models\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = []\n"
+                "    operations = [migrations.CreateModel(name='Order', "
+                "fields=[('code', models.CharField(max_length=255))])]\n",
+            )
+            _write(
+                app, "0003_alter",
+                "from django.db import migrations, models\n"
+                "class Migration(migrations.Migration):\n"
+                "    dependencies = [('orders', '0002_unavailable')]\n"
+                "    operations = [migrations.AlterField('order', 'code', "
+                "models.CharField(max_length=300))]\n",
+            )
+            findings = _by_rule(analyze_migration_risks(tmp, current_schema={}))
+            self.assertIn("alter_field_char_length", findings)
+
     def test_char_field_length_change_flagged(self) -> None:
         with TemporaryDirectory() as tmp:
             app = Path(tmp) / "orders"
