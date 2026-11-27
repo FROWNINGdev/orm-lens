@@ -142,7 +142,7 @@ All of it is here, MIT-licensed, with no tier gate, no seat count, no account, a
 
 ### 🤝 Contributors
 
-Most fixes now come from people who found orm-lens through a `good first issue`. Each one is a real wrong answer from a real Django codebase, with a repro, the file to start in and the test to make pass.
+Most fixes now come from people who found orm-lens through a `good first issue`. Each one is a real wrong answer from a real Django codebase, with a repro, the file to start in and the test to make pass. Where they come from: [24 open-source Django projects vs. a static parser](docs/articles/real-django-code-vs-static-parser.md).
 
 <div align="center">
   <a href="https://github.com/FROWNINGdev/orm-lens/graphs/contributors">
