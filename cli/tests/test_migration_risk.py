@@ -1342,6 +1342,60 @@ class RealWorldPrecisionTest(unittest.TestCase):
         )
         self.assertEqual(ddl_first["add_field_not_null_no_default"][0].severity, "critical")
 
+    def test_unpacked_field_options_are_warning_low(self) -> None:
+        rules = self._rules(
+            self._add("models.CharField(**app_settings.HARDWARE_ID_OPTIONS)")
+        )
+        hits = rules["add_field_not_null_no_default"]
+        self.assertEqual(len(hits), 1)
+        finding = hits[0]
+        self.assertEqual((finding.severity, finding.confidence), ("warning", "low"))
+        self.assertIn("**", finding.description)
+        self.assertIn("null=True", finding.description)
+        self.assertIn("default", finding.description)
+        self.assertNotIn("IntegrityError", finding.description)
+
+    def test_unpacked_explicit_null_false_may_supply_a_default(self) -> None:
+        rules = self._rules(self._add("models.CharField(null=False, **extra)"))
+        hits = rules["add_field_not_null_no_default"]
+        self.assertEqual(len(hits), 1)
+        finding = hits[0]
+        self.assertEqual((finding.severity, finding.confidence), ("warning", "low"))
+        self.assertIn("**", finding.description)
+        self.assertIn("default", finding.description)
+        # null=False is on the call, so the note must name the default only.
+        self.assertNotIn("null=True", finding.description)
+        self.assertNotIn("could not be read", finding.description)
+        self.assertNotIn("IntegrityError", finding.description)
+
+    def test_unpacked_literal_charfield_stays_critical(self) -> None:
+        rules = self._rules(self._add("models.CharField(max_length=32)"))
+        hits = rules["add_field_not_null_no_default"]
+        self.assertEqual(len(hits), 1)
+        finding = hits[0]
+        self.assertEqual((finding.severity, finding.confidence), ("critical", "high"))
+
+    def test_unpacked_null_true_is_not_reported(self) -> None:
+        rules = self._rules(self._add("models.CharField(null=True, **extra)"))
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
+    def test_unpacked_explicit_default_is_not_reported(self) -> None:
+        rules = self._rules(self._add('models.CharField(default="ready", **extra)'))
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
+    def test_unpacked_options_outrank_an_earlier_runpython(self) -> None:
+        add = self._add("models.CharField(**app_settings.HARDWARE_ID_OPTIONS)")
+        rules = self._rules(
+            "        migrations.RunPython(wipe, migrations.RunPython.noop),\n" + add
+        )
+        hits = rules["add_field_not_null_no_default"]
+        self.assertEqual(len(hits), 1)
+        finding = hits[0]
+        self.assertEqual((finding.severity, finding.confidence), ("warning", "low"))
+        self.assertIn("**", finding.description)
+        self.assertIn("null=True", finding.description)
+        self.assertNotIn("IntegrityError", finding.description)
+
     def test_name_brought_back_later_is_not_still_referenced(self) -> None:
         schema = {"orders": {"order": {"id", "groups", "status"}}}
         readd = (

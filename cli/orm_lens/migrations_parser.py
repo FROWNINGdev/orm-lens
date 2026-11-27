@@ -1368,7 +1368,23 @@ class MigrationRiskAnalyzer:
                 f"default; existing rows will raise IntegrityError."
             )
             nn_confidence, nn_severity = "high", "critical"
-            if self.data_op_before:
+            if any(kw.arg is None for kw in field_call.keywords):
+                # ``**options`` can hide null=True or a default. An explicit
+                # null=False fixes nullability, so only the default is
+                # uncertain; otherwise either option may be in the mapping.
+                # The mapping was not read, so this is warning/low rather
+                # than the warning/medium used for an earlier data operation.
+                uncertain = (
+                    "a default"
+                    if _kwarg_literal(field_call, "null") is False
+                    else "null=True or a default"
+                )
+                description = (
+                    f"May add a NOT NULL column '{name}' to '{model}' without a "
+                    f"default: ** may supply {uncertain}."
+                )
+                nn_confidence, nn_severity = "low", "warning"
+            elif self.data_op_before:
                 # A RunPython, or a RunSQL that deletes or updates rows, runs
                 # first. It may empty or backfill the table; say so instead of
                 # calling it certain.

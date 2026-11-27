@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **migration-risk lowers the confidence of `AddField` findings with unpacked
+  field options.** When `**options` may supply `null=True` or a default,
+  `add_field_not_null_no_default` reports `warning/low` and explains which
+  option is uncertain. Fixes #375.
+
 - **drift sees the columns of treebeard and tree-queries bases.** A model on
   `treebeard`'s `MP_Node` or `NS_Node`, or on `tree_queries`' `TreeNode`,
   got none of the columns those bases add (`path`, `depth`, `numchild`;
