@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Simplified Chinese translations for the queryset rules.** The documentation
+  for `DOL001` through `DOL007` is now available in Simplified Chinese and
+  linked from the locale index, the Chinese README and the complete rule
+  reference. Refs #81.
+
 ### Fixed
 
 - **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
