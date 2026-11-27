@@ -1502,6 +1502,34 @@ _PERMISSIONS_MIXIN = (
     _auth_m2m("user_permissions", "auth.Permission"),
 )
 
+_THIRD_PARTY_BASE_FIELDS: dict[tuple[str, str], tuple[ParsedField, ...]] = {
+    ("treebeard.mp_tree", "MP_Node"): (
+        _django_field("path", "CharField", "max_length=255, unique=True", "MP_Node"),
+        _django_field("depth", "PositiveIntegerField", "", "MP_Node"),
+        _django_field("numchild", "PositiveIntegerField", "default=0", "MP_Node"),
+    ),
+    ("treebeard.ns_tree", "NS_Node"): (
+        _django_field("lft", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("rgt", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("tree_id", "PositiveIntegerField", "db_index=True", "NS_Node"),
+        _django_field("depth", "PositiveIntegerField", "db_index=True", "NS_Node"),
+    ),
+    ("tree_queries.models", "TreeNode"): (
+        ParsedField(
+            name="parent",
+            type="ForeignKey",
+            args='"self", blank=True, null=True, on_delete=models.CASCADE, related_name="children"',
+            is_relation=True,
+            line_number=0,
+            related_model="self",
+            relation_kind="ForeignKey",
+            related_name="children",
+            on_delete="CASCADE",
+            inherited_from="TreeNode",
+        ),
+    ),
+}
+
 # Fields of django.contrib.auth's abstract bases, which live in site-packages
 # where a workspace scan never looks. ``is_active`` on AbstractBaseUser is a
 # plain class attribute, not a field. ``TimeStampedModel`` declares
@@ -1563,6 +1591,7 @@ def _abstract_bases_fields(
     model_path = Path(model.file_path)
     for base in model.base_classes:
         is_mptt_base = False
+        third_party: tuple[ParsedField, ...] | None = None
         known, parent = (
             resolver.lookup(model_path, base)
             if resolver is not None
@@ -1575,11 +1604,10 @@ def _abstract_bases_fields(
             # fall back to the name-only pick only for third-party bases.
             if known:
                 continue
-            is_mptt_base = (
-                resolver is not None
-                and resolver.model_root(model_path, base) == ("mptt.models", "MPTTModel")
-            )
-            if not is_mptt_base:
+            root = resolver.model_root(model_path, base) if resolver is not None else None
+            is_mptt_base = root == ("mptt.models", "MPTTModel")
+            third_party = _THIRD_PARTY_BASE_FIELDS.get(root) if root else None
+            if not is_mptt_base and third_party is None:
                 parent = _pick_base(by_name.get(target, []), model)
         elif parent is model or (
             parent.name == model.name and parent.file_path == model.file_path
@@ -1588,6 +1616,8 @@ def _abstract_bases_fields(
         if parent is None:
             if is_mptt_base:
                 contributed = _django_mptt_fields(mptt_names)
+            elif third_party is not None:
+                contributed = [replace(f) for f in third_party]
             else:
                 contributed = [replace(f) for f in DJANGO_ABSTRACT_BASES.get(target, ())]
         elif parent is model or not _is_abstract(parent):
