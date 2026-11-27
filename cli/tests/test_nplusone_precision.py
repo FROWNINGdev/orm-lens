@@ -489,3 +489,59 @@ def test_unknown_loop_model_still_guesses_names_that_are_a_relation_somewhere(tm
     (finding,) = scan_for_nplusone(str(tmp_path), schema)
     assert finding.accessed == ["owner", "missing"]
     assert finding.confidence == "medium"
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        'posts = posts.order_by("id")\n',
+        "if flag:\n    posts = posts.filter(id=1)\n",
+        'posts = posts.exclude(id=1)\nposts = posts.order_by("id")\n',
+        'posts = posts.order_by("id")[:10]\n',
+    ],
+)
+def test_rebound_queryset_keeps_its_select_related(tmp_path: Path, rebind: str) -> None:
+    # A queryset built over several lines keeps what an earlier line preloaded.
+    _write(
+        tmp_path / "views.py",
+        'posts = Post.objects.select_related("author")\n'
+        f"{rebind}"
+        "for post in posts:\n"
+        "    print(post.author.name)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
+
+
+def test_iterator_on_a_bound_queryset_keeps_its_select_related(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        'posts = Post.objects.filter(active=True).select_related("author")\n'
+        "for post in posts.iterator():\n"
+        "    print(post.author.name)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []
+
+
+def test_rebound_queryset_without_a_preload_is_checked_against_its_model(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "posts = Post.objects.all()\n"
+        'posts = posts.order_by("id")\n'
+        "for post in posts:\n"
+        "    print(post.author.name)\n",
+    )
+    [finding] = scan_for_nplusone(str(tmp_path), SCHEMA)
+    assert finding.suggested_fix == '.select_related("author")'
+    assert finding.confidence == "high"
+
+
+def test_projection_added_by_a_rebind_still_suppresses_the_loop(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        'rows = Post.objects.select_related("author")\n'
+        'rows = rows.values_list("author", named=True)\n'
+        'rows = rows.order_by("author")\n'
+        "for row in rows:\n"
+        "    print(row.author.real)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), SCHEMA) == []

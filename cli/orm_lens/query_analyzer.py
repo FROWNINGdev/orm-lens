@@ -1098,11 +1098,15 @@ class _QuerySetTracker(ast.NodeVisitor):
         while isinstance(receiver, ast.Subscript) and isinstance(receiver.slice, ast.Slice):
             receiver = receiver.value
         # Aliases and slices preserve model bindings. A projected receiver also
-        # stays projected through queryset chaining.
+        # stays projected through queryset chaining. Further calls on a bound
+        # name extend its chain, so `qs = qs.order_by(...)` keeps the model and
+        # what an earlier line preloaded.
         if isinstance(receiver, ast.Name):
             binding = self.bindings.get(receiver.id)
-            if binding is not None and (not chain or _projects_rows(binding[0])):
-                return binding[0]
+            if binding is not None:
+                if not chain or _projects_rows(binding[0]):
+                    return binding[0]
+                return binding[0] + chain
         return chain
 
     def visit_Assign(self, node: ast.Assign) -> None:

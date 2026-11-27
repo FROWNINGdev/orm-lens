@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nplusone`: a queryset built over several lines keeps its `select_related`.**
+  After `qs = Model.objects.select_related("room")`, a later
+  `qs = qs.order_by("id")`, a `filter()` added inside an `if`, or
+  `for x in qs.iterator():` was reported as if nothing had been preloaded:
+  the later calls replaced the bound chain. They now extend it. The model
+  also survives the rebind, so a loop with no preload is checked against
+  its model and reported with `high` confidence (#372).
+
 ## [py-1.18.5] - 2026-11-27
 
 > Findings in GitLab merge requests; treebeard columns in drift.
