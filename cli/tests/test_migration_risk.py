@@ -634,6 +634,56 @@ class AlterFieldTest(unittest.TestCase):
                 ["0002_shrink", "0003_shrink"],
             )
 
+    def test_opaque_operations_invalidate_lengths_until_reestablished(self) -> None:
+        for operations in (
+            "[WIDEN]",
+            "make_operations()",
+            "[CustomAlterField('order', 'code', models.CharField(max_length=300))]",
+            "[migrations.RunSQL('ALTER TABLE orders_order ALTER COLUMN code TYPE varchar(300)', state_operations=[WIDEN])]",
+            "[migrations.AlterField(model_name=MODEL_NAME, name=FIELD_NAME, field=models.CharField(max_length=300))]",
+        ):
+            with self.subTest(operations=operations), TemporaryDirectory() as tmp:
+                app = Path(tmp) / "orders"
+                _write(
+                    app, "0001_initial",
+                    "from django.db import migrations, models\n"
+                    "class Migration(migrations.Migration):\n"
+                    "    dependencies = []\n"
+                    "    operations = [migrations.CreateModel(name='Order', "
+                    "fields=[('code', models.CharField(max_length=100))])]\n",
+                )
+                _write(
+                    app, "0002_opaque",
+                    "from django.db import migrations, models\n"
+                    "WIDEN = migrations.AlterField('order', 'code', models.CharField(max_length=300))\n"
+                    "MODEL_NAME = 'order'\nFIELD_NAME = 'code'\n"
+                    "def make_operations(): return [WIDEN]\n"
+                    "class CustomAlterField(migrations.AlterField): pass\n"
+                    "class Migration(migrations.Migration):\n"
+                    "    dependencies = [('orders', '0001_initial')]\n"
+                    f"    operations = {operations}\n",
+                )
+                for name, dependency, length in [
+                    ("0003_narrow", "0002_opaque", 200),
+                    ("0004_widen", "0003_narrow", 250),
+                ]:
+                    _write(
+                        app, name,
+                        "from django.db import migrations, models\n"
+                        "class Migration(migrations.Migration):\n"
+                        f"    dependencies = [('orders', '{dependency}')]\n"
+                        "    operations = [migrations.AlterField('order', 'code', "
+                        f"models.CharField(max_length={length}))]\n",
+                    )
+                findings = _by_rule(analyze_migration_risks(tmp, current_schema={}))
+                self.assertEqual(
+                    [
+                        f.migration for f in findings.get("alter_field_char_length", [])
+                        if f.model == "order"
+                    ],
+                    ["0003_narrow"],
+                )
+
     def test_char_field_length_change_flagged(self) -> None:
         with TemporaryDirectory() as tmp:
             app = Path(tmp) / "orders"

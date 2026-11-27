@@ -1185,12 +1185,15 @@ class MigrationRiskAnalyzer:
     # ------------------------------------------------------------------
     def _walk_operations(self, ops_node: ast.AST) -> None:
         if not isinstance(ops_node, (ast.List, ast.Tuple)):
+            self.field_lengths.clear()
             return
         for position, elt in enumerate(ops_node.elts):
             if not isinstance(elt, ast.Call):
+                self.field_lengths.clear()
                 continue
             op = _call_op_name(elt)
             if op is None or op not in _KNOWN_OP_TYPES:
+                self.field_lengths.clear()
                 continue
             if op == "CreateModel":
                 created = _kwarg_literal(elt, "name")
@@ -1215,14 +1218,23 @@ class MigrationRiskAnalyzer:
                     # realistically raise. Never let a single malformed op sink
                     # the run — but propagate MemoryError, KeyboardInterrupt,
                     # SystemExit, or any unexpected class so real bugs surface.
+                    self.field_lengths.clear()
                     continue
             self._record_field_lengths(op, elt)
 
     def _record_field_lengths(self, op: str, call: ast.Call) -> None:
         """Replay known varchar lengths after checking the operation's old state."""
+        if op == "RunSQL":
+            state_ops = _get_kwarg(call, "state_operations")
+            if state_ops is not None and (
+                not isinstance(state_ops, (ast.List, ast.Tuple)) or state_ops.elts
+            ):
+                self.field_lengths.clear()
+            return
         if op in ("CreateModel", "DeleteModel", "RenameModel"):
             model = _kwarg_literal(call, "old_name" if op == "RenameModel" else "name")
             if not isinstance(model, str):
+                self.field_lengths.clear()
                 return
             model = model.lower()
             previous = {key: value for key, value in self.field_lengths.items() if key[0] == model}
@@ -1243,9 +1255,12 @@ class MigrationRiskAnalyzer:
                                 self._set_field_length(model, name, item.elts[1])
             return
 
+        if op not in ("AddField", "AlterField", "RemoveField", "RenameField"):
+            return
         model = _kwarg_literal(call, "model_name")
         name = _kwarg_literal(call, "old_name" if op == "RenameField" else "name")
         if not isinstance(model, str) or not isinstance(name, str):
+            self.field_lengths.clear()
             return
         model = model.lower()
         if op in ("AddField", "AlterField"):
