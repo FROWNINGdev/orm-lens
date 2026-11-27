@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--format gitlab`: GitLab Code Quality reports.** `migration-risk`,
+  `nplusone` and `blast-radius` can write the JSON array GitLab reads from
+  `artifacts:reports:codequality`, so findings show up in the merge request
+  widget. Paths are relative to the repository root, including with
+  `--path subdir`. The fingerprint is built from the rule, the file and the
+  operation, not the line, so a finding that only moved is not shown as
+  new. Ready-made jobs live in `templates/migration-risk.yml` and
+  `templates/nplusone.yml`; they take `spec:inputs` (stage, Python version,
+  orm-lens version, path, severity or confidence, extra arguments) and work
+  through `include:remote` or as a CI/CD component.
+
 - **Simplified Chinese translations for the queryset rules.** The documentation
   for `DOL001` through `DOL007` is now available in Simplified Chinese and
   linked from the locale index, the Chinese README and the complete rule
