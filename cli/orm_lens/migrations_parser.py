@@ -2033,12 +2033,17 @@ def analyze_migration_risks(
         )
         deps_unknown = unreadable or any(m.get("dependencies_unknown") for m in parsed)
         known_migrations = {m["name"] for m in parsed}
-        # A missing/opaque migration may have changed any earlier length.
-        # In that case only operations within the same file share knowledge.
-        complete_history = bool(effective_label) and not deps_unknown and all(
-            app != effective_label or name in known_migrations
-            for migration in parsed
-            for app, name in migration["dependencies"]
+        # Missing/opaque migrations and replacement histories cannot safely
+        # share lengths. Only operations within the same file share knowledge.
+        complete_history = (
+            bool(effective_label)
+            and not deps_unknown
+            and not any(m.get("replaces") for m in parsed)
+            and all(
+                app != effective_label or name in known_migrations
+                for migration in parsed
+                for app, name in migration["dependencies"]
+            )
         )
 
         app_findings: list[tuple[int, MigrationRisk]] = []

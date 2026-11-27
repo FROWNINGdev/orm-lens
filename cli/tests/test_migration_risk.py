@@ -602,6 +602,38 @@ class AlterFieldTest(unittest.TestCase):
             findings = _by_rule(analyze_migration_risks(tmp, current_schema={}))
             self.assertIn("alter_field_char_length", findings)
 
+    def test_squash_does_not_hide_original_narrowing(self) -> None:
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / "orders"
+            for name, length, dependencies, replaces in [
+                ("0001_initial", 255, [], []),
+                ("0002_shrink", 200, [("orders", "0001_initial")], []),
+                ("0003_shrink", 100, [("orders", "0002_shrink")], []),
+                ("0001_squashed_0003", 100, [], [
+                    ("orders", "0001_initial"), ("orders", "0002_shrink"),
+                    ("orders", "0003_shrink"),
+                ]),
+            ]:
+                field = f"models.CharField(max_length={length})"
+                op = (
+                    f"migrations.CreateModel(name='Order', fields=[('code', {field})])"
+                    if name.startswith("0001")
+                    else f"migrations.AlterField('order', 'code', {field})"
+                )
+                _write(
+                    app, name,
+                    "from django.db import migrations, models\n"
+                    "class Migration(migrations.Migration):\n"
+                    f"    dependencies = {dependencies!r}\n"
+                    f"    replaces = {replaces!r}\n"
+                    f"    operations = [{op}]\n",
+                )
+            findings = _by_rule(analyze_migration_risks(tmp, current_schema={}))
+            self.assertEqual(
+                [f.migration for f in findings["alter_field_char_length"]],
+                ["0002_shrink", "0003_shrink"],
+            )
+
     def test_char_field_length_change_flagged(self) -> None:
         with TemporaryDirectory() as tmp:
             app = Path(tmp) / "orders"
