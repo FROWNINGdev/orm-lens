@@ -269,6 +269,24 @@ class AddFieldNotNullTest(unittest.TestCase):
                 "add_field_not_null_no_default", _by_rule(findings)
             )
 
+    def test_star_options_lower_to_warning_low(self) -> None:
+        """A ** options dict hides null= and default=, so the finding is
+        uncertain rather than a certain IntegrityError (#375)."""
+        rules = self._add_field_findings(
+            "models.CharField(**app_settings.HARDWARE_ID_OPTIONS)"
+        )
+        finding = rules["add_field_not_null_no_default"][0]
+        self.assertEqual(finding.severity, "warning")
+        self.assertEqual(finding.confidence, "low")
+        self.assertIn("** argument", finding.description)
+
+    def test_negative_null_true_with_star_options_is_safe(self) -> None:
+        """null=True is visible next to the ** options, so there is no risk."""
+        rules = self._add_field_findings(
+            "models.CharField(null=True, **app_settings.EXTRA_OPTIONS)"
+        )
+        self.assertNotIn("add_field_not_null_no_default", rules)
+
 
 # ---------------------------------------------------------------------------
 # Rule 2a/2b: RemoveField / DeleteModel cross-reference

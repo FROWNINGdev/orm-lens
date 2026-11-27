@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AddField` with a `**` options dict is a warning, not critical.** A
+  migration that builds `models.CharField(**app_settings.HARDWARE_ID_OPTIONS)`
+  has its `null=` and `default=` inside the dict, which the parser cannot
+  read. The rule treated the blind spot as a certain `IntegrityError`; it
+  now reports a low-confidence warning and says why. `null=True` written
+  next to the `**` options is still visible and stays safe. Fixes #375.
+
 - **drift sees the columns of treebeard and tree-queries bases.** A model on
   `treebeard`'s `MP_Node` or `NS_Node`, or on `tree_queries`' `TreeNode`,
   got none of the columns those bases add (`path`, `depth`, `numchild`;
