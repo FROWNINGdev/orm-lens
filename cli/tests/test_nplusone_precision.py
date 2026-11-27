@@ -489,3 +489,33 @@ def test_unknown_loop_model_still_guesses_names_that_are_a_relation_somewhere(tm
     (finding,) = scan_for_nplusone(str(tmp_path), schema)
     assert finding.accessed == ["owner", "missing"]
     assert finding.confidence == "medium"
+
+
+def test_unknown_loop_model_skips_model_internals_and_dunders(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "def labels(review):\n"
+        "    for score in review.scores.all():\n"
+        "        print(score._meta.get_field('label').verbose_name)\n"
+        "        print(score._state.adding, score._prefetched_objects_cache)\n"
+        "        print(list(score._prefetched_objects_cache.values()))\n"
+        "\n"
+        "\n"
+        "def tags(value):\n"
+        "    for item in value.all():\n"
+        "        print(item.__class__.__name__)\n",
+    )
+    assert scan_for_nplusone(str(tmp_path), {}) == []
+
+
+def test_unknown_loop_model_still_reports_relation_alongside_model_internals(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "views.py",
+        "def labels(review):\n"
+        "    for score in review.scores.all():\n"
+        "        print(score._meta.get_field('label').verbose_name)\n"
+        "        print(score.label.name)\n",
+    )
+    (finding,) = scan_for_nplusone(str(tmp_path), {})
+    assert finding.accessed == ["label"]
+    assert finding.suggested_fix == '.select_related("label")'
