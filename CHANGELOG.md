@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Simplified Chinese translations for the queryset rules.** The documentation
+  for `DOL001` through `DOL007` is now available in Simplified Chinese and
+  linked from the locale index, the Chinese README and the complete rule
+  reference. Refs #81.
+
+### Fixed
+
+- **migration-risk flags a shorter `max_length` on `SlugField`, `EmailField`
+  and `URLField`**.
+  `alter_field_char_length` only matched the exact name `CharField`, so
+  `AlterField(..., field=models.EmailField(max_length=100))` got no finding,
+  although these fields are varchar columns and existing rows longer than
+  the new length make the migration fail the same way. The rule now covers
+  Django's CharField subclasses and project fields named like them
+  (`LowercaseCharField`); `TextField` stays out, as its `max_length` does
+  not reach the column.
+
+### Fixed
+
+- **A one-line `class Meta: abstract = True` is read**.
+  Only the lines below `class Meta:` were parsed, so options written on the
+  header line itself were lost. Such an abstract base was listed as a
+  concrete model, its fields were missing from every subclass, and `drift`
+  failed with "declared, but no migration creates it" for the base and
+  "migrated but no longer declared" for the inherited columns. Options after
+  the colon (`proxy = True`, `db_table = "items"`, several separated by `;`)
+  are now read like the indented ones.
+
+### Fixed
+
+- **`er --format d2` quotes names D2 reserves.** A column named `width`,
+  `height`, `label`, `link`, `icon` or another D2 keyword was read as an
+  attribute of the table, not as a row: wagtail's image `width` and `height`
+  made `d2` reject the file, and a `label` column renamed the table. A model
+  named `Label` or `Link` broke the same way. Such names are now quoted, as
+  the D2 docs ask.
+
+### Fixed
+
+- **`er` (Mermaid) draws SQLAlchemy foreign key columns.** The default
+  Mermaid diagram left every SQLAlchemy foreign key column out of its table,
+  so `Address` lost `user_id` and an association table keyed by two foreign
+  keys (`order_id, tenant_id`) showed only `tenant_id`. They are now drawn
+  with their column type, as DBML, D2, PlantUML and DOT have since #356.
+
 ### Fixed
 
 - **A bare `.select_related()` no longer hides a nullable relation from DOL007
