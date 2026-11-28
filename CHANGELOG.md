@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A method or property shadowing an abstract field is not treated as a column.**
+  Django skips copying an abstract base's field when the subclass body binds
+  that name itself, including a `def name` / `@property def name` override.
+  orm-lens still copied it, so `drift` reported "declared but never migrated"
+  and `migration-risk` rated the matching `RemoveField` as a critical
+  `remove_field_still_referenced`. Methods directly in the class body now hide
+  the inherited field like `name = None` does; `def __str__`, nested classes
+  and definitions inside an `if` block change nothing. Fixes
+  [#376](https://github.com/FROWNINGdev/orm-lens/issues/376).
+
 ## [py-1.18.5] - 2026-11-27
 
 > Findings in GitLab merge requests; treebeard columns in drift.
