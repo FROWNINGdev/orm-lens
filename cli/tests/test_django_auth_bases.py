@@ -237,6 +237,21 @@ class DjangoAuthBasesTest(unittest.TestCase):
         )
         self.assertNotIn("username", [f.name for f in user.inherited_fields])
 
+    def test_a_generic_method_hides_an_inherited_field(self) -> None:
+        for header in (
+            "    def username[T](self, value: T):\n",
+            "    def username[T: list[int]](self, value: T):\n",
+        ):
+            with self.subTest(header=header):
+                user = _user(
+                    "from django.contrib.auth.models import AbstractUser\n"
+                    "\n"
+                    "class User(AbstractUser):\n"
+                    f"{header}"
+                    "        return value\n"
+                )
+                self.assertNotIn("username", [f.name for f in user.inherited_fields])
+
     def test_a_method_matching_no_inherited_field_changes_nothing(self) -> None:
         user = _user(
             "from django.contrib.auth.models import AbstractUser\n"

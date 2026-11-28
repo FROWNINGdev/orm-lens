@@ -166,9 +166,7 @@ def _read_multiline_class(lines: Sequence[str], start: int):
 
 _COND_OPENER_RE = re.compile(r"^\s*(if|elif|else|try|except|finally)\b")
 _METHOD_OR_CLASS_RE = re.compile(r"^\s*(?:(?:async\s+)?def|class)\s+")
-_DEF_NAME_RE = re.compile(
-    r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\("
-)
+_DEF_NAME_RE = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)")
 
 
 def _line_indent_width(line: str) -> int:
