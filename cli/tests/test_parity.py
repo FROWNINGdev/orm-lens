@@ -96,6 +96,12 @@ class ParityFixtureTest(unittest.TestCase):
         self.assertEqual(tags_field.related_model, "Tag")
         self.assertEqual(tags_field.through_model, "BookTag")
 
+        tag = models[2]
+        self.assertEqual(
+            [(f.name, f.type, f.is_relation) for f in tag.fields],
+            [("name", "SlugField", False), ("content_object", "GenericForeignKey", False)],
+        )
+
         book_tag = models[3]
         self.assertEqual(len(book_tag.fields), 2)
         self.assertEqual(book_tag.fields[0].name, "book")

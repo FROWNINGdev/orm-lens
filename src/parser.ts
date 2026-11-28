@@ -175,6 +175,7 @@ const BARE_FIELD_TYPES = [
   'AutoField', 'BigAutoField', 'SmallAutoField',
   'ForeignKey', 'OneToOneField', 'ManyToManyField',
   'TaggableManager',
+  'GenericForeignKey',
   'TreeForeignKey', 'TreeOneToOneField', 'TreeManyToManyField',
 ].join('|');
 

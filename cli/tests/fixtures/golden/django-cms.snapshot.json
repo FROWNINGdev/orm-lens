@@ -225,6 +225,13 @@
               "lineNumber": 43,
               "name": "object_id",
               "type": "PositiveIntegerField"
+            },
+            {
+              "args": "\"content_type\", \"object_id\"",
+              "isRelation": false,
+              "lineNumber": 44,
+              "name": "source",
+              "type": "GenericForeignKey"
             }
           ],
           "filePath": "cms/models/placeholdermodel.py",
