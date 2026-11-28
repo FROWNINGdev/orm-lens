@@ -166,6 +166,9 @@ def _read_multiline_class(lines: Sequence[str], start: int):
 
 _COND_OPENER_RE = re.compile(r"^\s*(if|elif|else|try|except|finally)\b")
 _METHOD_OR_CLASS_RE = re.compile(r"^\s*(?:(?:async\s+)?def|class)\s+")
+_DEF_NAME_RE = re.compile(
+    r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\]]*\])?\s*\("
+)
 
 
 def _line_indent_width(line: str) -> int:
@@ -1045,6 +1048,12 @@ def _collect_defs(
                     j = cond_header[1] + 1
                     continue
                 if _METHOD_OR_CLASS_RE.match(inner):
+                    method = _DEF_NAME_RE.match(inner)
+                    if method and not cond_stack:
+                        # Django copies a field from an abstract parent only
+                        # when the subclass doesn't define that name itself,
+                        # so a method or property hides it like ``name = None``.
+                        model.removed_fields.append(method[1])
                     skip_indent = line_indent
                     hdr_end = _find_block_header_end(lines, j)
                     j = hdr_end + 1 if hdr_end is not None else j + 1

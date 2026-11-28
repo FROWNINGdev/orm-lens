@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from orm_lens.drift import detect_drift
+from orm_lens.migrations_parser import analyze_migration_risks
 from orm_lens.models import ParsedModel
 from orm_lens.parser import parse_models_file
 
@@ -48,6 +49,74 @@ class Migration(migrations.Migration):
         ),
     ]
 '''
+
+
+ABSTRACT_FIELD_SHADOWED_BY_PROPERTY = '''
+from django.db import models
+
+
+class Device(models.Model):
+    pass
+
+
+class BaseModel(models.Model):
+    name = models.CharField(max_length=64)
+
+    class Meta:
+        abstract = True
+
+
+class Config(BaseModel):
+    device = models.OneToOneField(Device, on_delete=models.CASCADE)
+
+    @property
+    def name(self):
+        return self.device.name
+'''
+
+INITIAL_SHADOWED_FIELD_MIGRATION = '''
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = []
+    operations = [
+        migrations.CreateModel(
+            name="Device",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+            ],
+        ),
+        migrations.CreateModel(
+            name="Config",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+                ("name", models.CharField(max_length=64)),
+                ("device", models.OneToOneField(on_delete=models.CASCADE, to="shop.device")),
+            ],
+        ),
+    ]
+'''
+
+REMOVE_SHADOWED_FIELD_MIGRATION = '''
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [("shop", "0001_initial")]
+    operations = [
+        migrations.RemoveField(model_name="config", name="name"),
+    ]
+'''
+
+
+PLAIN_ABSTRACT_USER = (
+    "from django.contrib.auth.models import AbstractUser\n"
+    "\n"
+    "class User(AbstractUser):\n"
+    "    pass\n"
+)
 
 
 def _user(source: str) -> ParsedModel:
@@ -146,6 +215,78 @@ class DjangoAuthBasesTest(unittest.TestCase):
         self.assertNotIn("first_name", names)
         self.assertNotIn("last_name", names)
 
+    def test_a_method_hides_an_inherited_field_of_the_same_name(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    @property\n"
+            "    def username(self):\n"
+            "        return self.email\n"
+        )
+        self.assertNotIn("username", [f.name for f in user.inherited_fields])
+        self.assertIn("username", user.removed_fields)
+
+    def test_an_async_method_hides_an_inherited_field(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    async def username(self):\n"
+            "        return self.email\n"
+        )
+        self.assertNotIn("username", [f.name for f in user.inherited_fields])
+
+    def test_a_method_matching_no_inherited_field_changes_nothing(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    def __str__(self):\n"
+            "        return self.email\n"
+        )
+        self.assertEqual(
+            [f.name for f in user.inherited_fields],
+            [f.name for f in _user(PLAIN_ABSTRACT_USER).inherited_fields],
+        )
+
+    def test_a_property_does_not_remove_a_field_declared_by_the_same_class(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "from django.db import models\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    username = models.CharField(max_length=150)\n"
+            "\n"
+            "    @property\n"
+            "    def username(self):\n"
+            "        return self.email\n"
+        )
+        self.assertIn("username", [f.name for f in user.fields])
+
+    def test_a_def_inside_an_if_does_not_remove_the_field(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    if True:\n"
+            "        def username(self):\n"
+            "            return self.email\n"
+        )
+        self.assertIn("username", [f.name for f in user.inherited_fields])
+        self.assertEqual(user.removed_fields, [])
+
+    def test_a_nested_class_is_not_a_removed_field(self) -> None:
+        user = _user(
+            "from django.contrib.auth.models import AbstractUser\n"
+            "\n"
+            "class User(AbstractUser):\n"
+            "    class Meta:\n"
+            "        ordering = ['username']\n"
+        )
+        self.assertIn("username", [f.name for f in user.inherited_fields])
+        self.assertEqual(user.removed_fields, [])
+
     def test_an_abstract_parent_override_beats_the_django_field(self) -> None:
         models_ = parse_models_file(
             "accounts/models.py",
@@ -175,6 +316,43 @@ class DjangoAuthBasesTest(unittest.TestCase):
                 INITIAL_MIGRATION, encoding="utf-8"
             )
             self.assertEqual(detect_drift(str(root)).to_dict()["drifted"], [])
+
+
+class AbstractFieldShadowedByPropertyTest(unittest.TestCase):
+    def _workspace(self, root: Path) -> None:
+        app = root / "shop"
+        (app / "migrations").mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "models.py").write_text(
+            ABSTRACT_FIELD_SHADOWED_BY_PROPERTY, encoding="utf-8"
+        )
+        (app / "migrations" / "__init__.py").write_text("", encoding="utf-8")
+        (app / "migrations" / "0001_initial.py").write_text(
+            INITIAL_SHADOWED_FIELD_MIGRATION, encoding="utf-8"
+        )
+        (app / "migrations" / "0002_remove_config_name.py").write_text(
+            REMOVE_SHADOWED_FIELD_MIGRATION, encoding="utf-8"
+        )
+
+    def test_a_property_shadowing_an_inherited_field_is_not_drift(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._workspace(root)
+            self.assertEqual(detect_drift(str(root)).to_dict()["drifted"], [])
+
+    def test_removing_the_shadowed_field_is_info_not_critical(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._workspace(root)
+            findings = [
+                f
+                for f in analyze_migration_risks(str(root))
+                if f.model == "config" and f.field == "name"
+            ]
+            self.assertEqual(
+                [(f.rule, f.severity) for f in findings],
+                [("remove_field", "info")],
+            )
 
 
 if __name__ == "__main__":
